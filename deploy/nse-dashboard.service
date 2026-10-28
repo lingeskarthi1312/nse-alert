@@ -1,0 +1,19 @@
+[Unit]
+Description=NSE Stock Tracker dashboard with login (http://localhost:8502)
+Wants=network-online.target postgresql.service clickhouse-server.service
+After=network-online.target postgresql.service clickhouse-server.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/mnt/e/alert
+Environment=TZ=Asia/Kolkata
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do [ -f /mnt/e/alert/dashboard.py ] && exit 0; sleep 5; done; exit 1'
+# localhost only: open it from this PC's browser. For access from other
+# devices use the cloud deployment (HTTPS) in deploy/gcp/.
+ExecStart=/root/nse-alert-venv/bin/streamlit run dashboard.py --server.address 127.0.0.1 --server.port 8502 --server.headless true --browser.gatherUsageStats false
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,233 @@
+{
+  "_comment": "Non-secret scheduler/retention settings. Secrets live in .env. Cron times are in the configured market timezone (ALERT_TIMEZONE, default Asia/Kolkata). Schedules mirror the crontab that this service replaced (crontab.before_service_20261019_120238).",
+  "jobs": [
+    {
+      "id": "price_import",
+      "description": "Load missing daily prices from Yahoo Finance into nse_alerts.daily_stock_prices",
+      "_schedules_note": "Each import starts 15 min before a consumer job: 10:00/13:30/15:30 daily_alerts, 16:30 MTD rankings.",
+      "schedules": ["45 9 * * 1-5", "15 13 * * 1-5", "15 15 * * 1-5", "15 16 * * 1-5"],
+      "steps": [["{python}", "-u", "load_all_stock_prices.py"]],
+      "log_file": "load_all_stock_prices.log",
+      "lock_file": "load_all_stock_prices.lock",
+      "timeout_seconds": 3600,
+      "run_on_startup": true,
+      "needs_internet": true,
+      "needs_clickhouse": true,
+      "catch_up": "latest",
+      "max_lateness_minutes": 720
+    },
+    {
+      "id": "daily_alerts",
+      "description": "Evaluate user_alerts rules, record alert_history, email + queue WhatsApp",
+      "schedules": ["0 10 * * 1-5", "30 13 * * 1-5", "30 15 * * 1-5"],
+      "steps": [["{python}", "-u", "scheduled_daily_alerts.py"]],
+      "log_file": "scheduled_daily_alerts.log",
+      "timeout_seconds": 900,
+      "needs_internet": true,
+      "needs_clickhouse": true,
+      "catch_up": "latest",
+      "max_lateness_minutes": 360
+    },
+    {
+      "id": "mtd_rankings_whatsapp",
+      "description": "Save MTD rankings snapshot then email it (and WhatsApp if WHATSAPP_ENABLED=true)",
+      "schedules": ["30 16 * * 1-5"],
+      "steps": [
+        ["{python}", "-u", "save_mtd_rankings.py"],
+        ["{python}", "-u", "whatsapp_mtd_rankings.py"]
+      ],
+      "log_file": "daily_whatsapp_rankings.log",
+      "timeout_seconds": 1200,
+      "needs_internet": true,
+      "needs_clickhouse": true,
+      "catch_up": "latest",
+      "max_lateness_minutes": 900
+    },
+    {
+      "id": "mtd_cleanup",
+      "description": "Remove previous-month data from MTD-only datasets (ClickHouse + SQLite alert history)",
+      "schedules": ["20 0 * * *"],
+      "builtin": "mtd_cleanup",
+      "run_on_startup": true,
+      "needs_internet": false,
+      "needs_clickhouse": true,
+      "catch_up": "latest",
+      "max_lateness_minutes": 10080,
+      "timeout_seconds": 1800
+    },
+    {
+      "id": "daily_summary",
+      "description": "Daily operational summary of job runs and WhatsApp queue",
+      "schedules": ["0 18 * * *"],
+      "builtin": "daily_summary",
+      "needs_internet": false,
+      "needs_clickhouse": false,
+      "catch_up": "latest",
+      "max_lateness_minutes": 720,
+      "max_attempts": 3
+    },
+    {
+      "id": "intraday_alerts",
+      "description": "Live (Yahoo, ~15 min delayed) check of watchlist alert rules every 5 min in market hours",
+      "_schedules_note": "09:15-15:45 IST weekdays; polls run until 15:45 because the free feed lags ~15 min",
+      "schedules": ["15-55/5 9 * * 1-5", "*/5 10-14 * * 1-5", "0-45/5 15 * * 1-5"],
+      "builtin": "intraday_alerts",
+      "needs_internet": true,
+      "needs_clickhouse": true,
+      "catch_up": "skip",
+      "max_lateness_minutes": 5,
+      "max_attempts": 2,
+      "retry_backoff_seconds": 60,
+      "retry_backoff_max_seconds": 60,
+      "timeout_seconds": 240,
+      "failure_alert_after": 3
+    },
+    {
+      "id": "intraday_reco",
+      "description": "Intraday BUY/SELL scan on 5-minute bars every 15 min (09:30-14:30 IST)",
+      "schedules": ["30-45/15 9 * * 1-5", "*/15 10-13 * * 1-5", "0-30/15 14 * * 1-5"],
+      "builtin": "intraday_reco",
+      "needs_internet": true,
+      "needs_clickhouse": true,
+      "catch_up": "skip",
+      "max_lateness_minutes": 10,
+      "max_attempts": 2,
+      "retry_backoff_seconds": 60,
+      "retry_backoff_max_seconds": 60,
+      "timeout_seconds": 600,
+      "failure_alert_after": 3
+    },
+    {
+      "id": "intraday_backtest",
+      "description": "Weekly backtest of the intraday rules on ~59 days of 5-minute bars",
+      "schedules": ["0 8 * * 6"],
+      "builtin": "intraday_backtest",
+      "needs_internet": true,
+      "needs_clickhouse": true,
+      "catch_up": "latest",
+      "max_lateness_minutes": 10080,
+      "timeout_seconds": 3600,
+      "max_attempts": 3
+    },
+    {
+      "id": "recommendations",
+      "description": "Score the universe (stocks + gold/silver ETFs) on completed daily bars; store top-5 rankings in ClickHouse",
+      "schedules": ["25 16 * * 1-5"],
+      "builtin": "recommendations",
+      "needs_internet": true,
+      "needs_clickhouse": true,
+      "catch_up": "latest",
+      "max_lateness_minutes": 360,
+      "timeout_seconds": 1800
+    },
+    {
+      "id": "daily_report",
+      "description": "Personalised email: watchlist prices, triggered alerts, enabled recommendation sections. Time overridable with DAILY_REPORT_TIME",
+      "schedules": ["45 16 * * 1-5"],
+      "builtin": "daily_report",
+      "needs_internet": true,
+      "needs_clickhouse": true,
+      "catch_up": "latest",
+      "max_lateness_minutes": 360
+    },
+    {
+      "id": "backtest",
+      "description": "Weekly walk-forward backtest of the recommendation model (writes state/backtest_latest.json)",
+      "schedules": ["0 7 * * 6"],
+      "builtin": "backtest",
+      "needs_internet": true,
+      "needs_clickhouse": true,
+      "catch_up": "latest",
+      "max_lateness_minutes": 10080,
+      "timeout_seconds": 3600,
+      "max_attempts": 3
+    }
+  ],
+  "intraday_reco": {
+    "_comment": "Intraday BUY (long) / SELL (short) scan on 5-minute bars (Yahoo, ~15 min delayed). See alert_system/intraday_reco.py.",
+    "benchmark": "^NSEI",
+    "top_n": 10,
+    "min_confirmations": 4,
+    "volume_surge_min": 1.5,
+    "max_extension_atr": 3.0,
+    "stop_atr_mult": 1.5,
+    "target_r": 2.0,
+    "min_traded_value_cr": 10,
+    "max_quote_age_minutes": 40,
+    "no_new_signals_after": "14:30",
+    "square_off": "15:15",
+    "weights": {"trend": 25, "breakout": 20, "momentum": 15, "volume": 20, "relative_strength": 20},
+    "costs": {
+      "_comment": "Intraday (MIS) round trip approx: brokerage ~0.03%, STT 0.025% sell, exchange/SEBI/GST/stamp ~0.01%, slippage ~0.05%",
+      "round_trip_cost_pct": 0.12
+    },
+    "backtest": {
+      "period": "59d",
+      "first_check": "09:45",
+      "per_check": 2,
+      "validation": {"min_oos_trades": 50, "min_profit_factor": 1.2}
+    }
+  },
+  "recommendations": {
+    "_comment": "Transparent scoring model. Weights are relative; filters exclude instruments; a BUY CANDIDATE needs min_confirmations of 5 independent checks (+1 when the Nifty 50 is below its 200-DMA).",
+    "history_days": 420,
+    "max_data_age_days": 4,
+    "benchmark": "^NSEI",
+    "top_n": 10,
+    "commodities": [
+      {"symbol": "GOLDBEES.NS", "name": "Nippon India ETF Gold BeES", "asset_class": "Gold ETF", "exchange": "NSE", "currency": "INR"},
+      {"symbol": "SILVERBEES.NS", "name": "Nippon India Silver ETF", "asset_class": "Silver ETF", "exchange": "NSE", "currency": "INR"}
+    ],
+    "weights": {"trend": 25, "momentum": 20, "relative_strength": 20, "volume": 15, "macd": 10, "risk": 10},
+    "filters": {
+      "min_bars": 220,
+      "min_price": 20,
+      "max_atr_pct": 6.0,
+      "min_traded_value_cr": {"Large-cap": 20, "Mid-cap": 10, "Small-cap": 5, "Commodity ETF": 5, "default": 5}
+    },
+    "signal": {
+      "min_confirmations": 3,
+      "min_score_buy": 60,
+      "min_score_watch": 45,
+      "min_risk_reward": 2.0,
+      "overbought_rsi": 75,
+      "max_extension_atr": 3.0
+    },
+    "levels": {"stop_atr_mult": 2.0, "target_r_multiple": 2.0, "entry_atr_band": 0.5},
+    "position_sizing": {"risk_per_trade_pct": 1.0},
+    "costs": {
+      "_comment": "Delivery equity, approx. round trip: STT 0.2%, exchange+SEBI+GST ~0.01%, stamp 0.015%, DP charge, slippage ~0.2%",
+      "round_trip_cost_pct": 0.45
+    },
+    "backtest": {
+      "history_days": 1100,
+      "rebalance_every": 5,
+      "max_hold_days": 20,
+      "validation": {"min_oos_trades": 30, "min_profit_factor": 1.2, "max_drawdown_pct": 25}
+    }
+  },
+  "mtd_cleanup": {
+    "allowed_databases": ["nse_alerts"],
+    "targets": [
+      {
+        "table": "nse_alerts.daily_stock_prices",
+        "date_column": "trade_date",
+        "baseline_lookback_days": 10,
+        "baseline_key_column": "symbol",
+        "_comment": "MTD % change needs the last close BEFORE the 1st (see save_mtd_rankings.py), so a short pre-month window is kept. load_all_stock_prices.py uses the same window start so deleted rows are not re-imported."
+      },
+      {
+        "table": "nse_alerts.daily_mtd_rankings",
+        "date_column": "trade_date",
+        "baseline_lookback_days": 0
+      },
+      {
+        "table": "nse_alerts.recommendations",
+        "date_column": "run_date",
+        "baseline_lookback_days": 0
+      }
+    ],
+    "_excluded_comment": "Only tables listed in targets are ever cleaned. Not listed on purpose: nse_alerts.stock_categories (reference data). Email/WhatsApp delivery audit (holdings.db notification_outbox) and alert dedup state are kept for NOTIFICATION_AUDIT_RETENTION_DAYS, not MTD.",
+    "sqlite_alert_history": true
+  }
+}

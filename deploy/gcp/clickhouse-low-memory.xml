@@ -1,0 +1,64 @@
+<?xml version="1.0"?>
+<!-- Low-memory ClickHouse profile for a 1 GB e2-micro (plus 4 GB swap).
+     Installed as /etc/clickhouse-server/config.d/low-memory.xml.
+     The nse_alerts data set is tiny (MTD only); the defaults are sized for
+     big servers. Internal system log tables are disabled: on the laptop they
+     had grown to ~12 GB and they cost RAM, CPU and disk for no benefit here. -->
+<clickhouse>
+    <listen_host>127.0.0.1</listen_host>
+    <max_server_memory_usage>536870912</max_server_memory_usage>      <!-- 512 MiB hard cap -->
+    <max_server_memory_usage_to_ram_ratio>0.5</max_server_memory_usage_to_ram_ratio>
+    <mark_cache_size>67108864</mark_cache_size>                        <!-- 64 MiB -->
+    <uncompressed_cache_size>0</uncompressed_cache_size>
+    <index_mark_cache_size>0</index_mark_cache_size>
+    <mmap_cache_size>64</mmap_cache_size>
+    <compiled_expression_cache_size>16777216</compiled_expression_cache_size>
+    <max_concurrent_queries>20</max_concurrent_queries>
+    <background_pool_size>2</background_pool_size>
+    <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
+    <background_schedule_pool_size>4</background_schedule_pool_size>
+    <background_common_pool_size>2</background_common_pool_size>
+    <background_move_pool_size>1</background_move_pool_size>
+    <background_fetches_pool_size>1</background_fetches_pool_size>
+    <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>
+    <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>
+    <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>
+    <tables_loader_foreground_pool_size>1</tables_loader_foreground_pool_size>
+    <tables_loader_background_pool_size>1</tables_loader_background_pool_size>
+    <max_thread_pool_size>500</max_thread_pool_size>
+    <!-- Must fit background_pool_size * concurrency_ratio (2*2=4) or the server refuses to start -->
+    <merge_tree>
+        <number_of_free_entries_in_pool_to_execute_mutation>2</number_of_free_entries_in_pool_to_execute_mutation>
+        <number_of_free_entries_in_pool_to_lower_max_size_of_merge>2</number_of_free_entries_in_pool_to_lower_max_size_of_merge>
+        <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>2</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>
+    </merge_tree>
+
+    <query_log remove="1"/>
+    <query_thread_log remove="1"/>
+    <query_views_log remove="1"/>
+    <part_log remove="1"/>
+    <trace_log remove="1"/>
+    <text_log remove="1"/>
+    <metric_log remove="1"/>
+    <latency_log remove="1"/>
+    <error_log remove="1"/>
+    <asynchronous_metric_log remove="1"/>
+    <asynchronous_insert_log remove="1"/>
+    <processors_profile_log remove="1"/>
+    <opentelemetry_span_log remove="1"/>
+    <session_log remove="1"/>
+    <crash_log remove="1"/>
+    <blob_storage_log remove="1"/>
+    <backup_log remove="1"/>
+    <s3queue_log remove="1"/>
+    <filesystem_cache_log remove="1"/>
+    <filesystem_read_prefetches_log remove="1"/>
+    <background_schedule_pool_log remove="1"/>
+    <query_metric_log remove="1"/>
+
+    <logger>
+        <level>warning</level>
+        <size>50M</size>
+        <count>3</count>
+    </logger>
+</clickhouse>

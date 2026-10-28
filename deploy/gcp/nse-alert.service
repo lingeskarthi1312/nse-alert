@@ -1,0 +1,29 @@
+[Unit]
+Description=NSE stock alert scheduler (/opt/nse-alert)
+Wants=network-online.target clickhouse-server.service postgresql.service
+After=network-online.target clickhouse-server.service postgresql.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=nsealert
+Group=nsealert
+WorkingDirectory=/opt/nse-alert
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=Asia/Kolkata
+Environment=ALERT_PYTHON=/opt/nse-alert/venv/bin/python
+ExecStartPre=/opt/nse-alert/venv/bin/python -m alert_system check-config
+ExecStart=/opt/nse-alert/venv/bin/python -u -m alert_system run
+Restart=always
+RestartSec=30
+TimeoutStopSec=60
+KillMode=mixed
+KillSignal=SIGTERM
+# 1 GB VM: keep the scheduler (and the jobs it spawns) from starving ClickHouse
+MemoryHigh=450M
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/opt/nse-alert /run/lock
+
+[Install]
+WantedBy=multi-user.target

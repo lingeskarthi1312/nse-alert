@@ -1,0 +1,21 @@
+[Unit]
+Description=NSE alert Streamlit dashboard (localhost only; Caddy adds HTTPS + password)
+Wants=network-online.target clickhouse-server.service postgresql.service
+After=network-online.target clickhouse-server.service postgresql.service
+
+[Service]
+Type=simple
+User=nsealert
+Group=nsealert
+WorkingDirectory=/opt/nse-alert
+Environment=TZ=Asia/Kolkata
+ExecStart=/opt/nse-alert/venv/bin/streamlit run dashboard.py --server.address 127.0.0.1 --server.port 8501 --server.headless true --browser.gatherUsageStats false
+Restart=always
+RestartSec=30
+MemoryHigh=300M
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/opt/nse-alert
+
+[Install]
+WantedBy=multi-user.target

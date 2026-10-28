@@ -1,0 +1,30 @@
+# Secrets - never commit (.env.example is the template)
+.env
+.env.*
+!.env.example
+
+# Personal data and database copies
+*.db
+*.db-*
+*.sqlite*
+*.dump
+_archive_*/
+deploy/gcp/out/
+
+# Runtime output
+logs/
+state/
+*.log
+*.lock
+
+# Backups made while editing
+*.bak*
+*.backup*
+*.before_*
+
+# Python / tooling
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/

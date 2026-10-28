@@ -1,0 +1,25 @@
+[Unit]
+Description=NSE stock alert scheduler (/mnt/e/alert)
+Wants=network-online.target clickhouse-server.service postgresql.service
+After=network-online.target clickhouse-server.service postgresql.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/mnt/e/alert
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=Asia/Kolkata
+# /mnt/e is a Windows drive mounted by WSL; wait until it is available.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do [ -f /mnt/e/alert/alert_system/__main__.py ] && exit 0; sleep 5; done; exit 1'
+ExecStartPre=/root/nse-alert-venv/bin/python -m alert_system check-config
+ExecStart=/root/nse-alert-venv/bin/python -u -m alert_system run
+Restart=always
+RestartSec=30
+TimeoutStartSec=330
+TimeoutStopSec=60
+KillMode=mixed
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
