@@ -1651,15 +1651,30 @@ def signup_form(mode):
 
 
 # ------------------------------------------------- persistent sign-in ---
-# A random token lives in the browser cookie COOKIE; PostgreSQL keeps only its
-# hash (user_sessions). A page refresh starts a new Streamlit session, which
-# resumes the user from the cookie instead of showing the login page.
+# A random token lives in the browser cookie COOKIE and in localStorage;
+# PostgreSQL keeps only its hash (user_sessions). A page refresh starts a new
+# Streamlit session, which resumes the user from the cookie instead of showing
+# the login page. Streamlit Community Cloud does not pass cookies to the app, so
+# there the page hands the localStorage token over once as ?s=..., which is
+# removed from the URL straight away.
 COOKIE = "nse_session"
+TOKEN_PARAM = "s"
 
 
 def _cookie_script(value, max_age):
+    store = (f"localStorage.setItem('{COOKIE}', '{value}');" if value and max_age
+             else f"localStorage.removeItem('{COOKIE}');")
     st.html("<script>document.cookie='" + COOKIE + "=" + value + "; Max-Age=" + str(max_age) +
-            "; Path=/; SameSite=Strict' + (location.protocol === 'https:' ? '; Secure' : '');</script>",
+            "; Path=/; SameSite=Strict' + (location.protocol === 'https:' ? '; Secure' : '');"
+            "try {" + store + "} catch (e) {}</script>",
+            unsafe_allow_javascript=True)
+
+
+def _resume_from_storage_script():
+    """Reload once with the stored token in the URL (no cookie reached us)."""
+    st.html("<script>try { const t = localStorage.getItem('" + COOKIE + "'); const u = new URL(location.href);"
+            " if (t && !u.searchParams.has('" + TOKEN_PARAM + "')) { u.searchParams.set('" + TOKEN_PARAM +
+            "', t); location.replace(u.toString()); } } catch (e) {}</script>",
             unsafe_allow_javascript=True)
 
 
@@ -1687,9 +1702,18 @@ def session_valid():
         return True
     if st.session_state.get("_clear_cookie"):
         return False
-    token = st.context.cookies.get(COOKIE)
+    sent = st.query_params.get_all(TOKEN_PARAM)
+    from_url = sent[-1] if sent else None
+    if sent:
+        del st.query_params[TOKEN_PARAM]
+    cookie = st.context.cookies.get(COOKIE)
+    token = (cookie if isinstance(cookie, str) else None) or from_url  # not a str under AppTest
     resumed = resume_session(settings(), token) if token else None
     if not resumed:
+        if from_url:
+            st.session_state["_clear_cookie"] = True  # stale stored token: forget it
+        else:
+            st.session_state["_try_storage"] = True
         return False
     st.session_state["user"] = {**resumed, "seen": datetime.now(IST)}
     st.session_state["_token"] = token
@@ -1703,6 +1727,8 @@ st.logo(str(APP_DIR / "static" / "logo.svg"), size="large")
 if not session_valid():
     if st.session_state.pop("_clear_cookie", False):
         _cookie_script("", 0)
+    elif st.session_state.pop("_try_storage", False):
+        _resume_from_storage_script()
     login_page()
     st.stop()
 
