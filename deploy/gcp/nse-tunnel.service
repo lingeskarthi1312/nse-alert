@@ -1,0 +1,13 @@
+[Unit]
+Description=ngrok tunnel: fixed public HTTPS link to the NSE dashboard (https://genetics-upcoming-placate.ngrok-free.dev)
+Wants=network-online.target nse-dashboard.service
+After=network-online.target nse-dashboard.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ngrok http 127.0.0.1:8501 --url=https://genetics-upcoming-placate.ngrok-free.dev --config=/root/.config/ngrok/ngrok.yml --log=stdout --log-format=logfmt
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

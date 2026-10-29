@@ -104,6 +104,19 @@ sudo -u "$APP_USER" bash -c "cd $APP && $APP/venv/bin/python -m alert_system che
 systemctl enable nse-alert nse-dashboard
 systemctl restart nse-alert nse-dashboard
 
+if [ -f "$BUNDLE/ngrok.yml" ]; then
+echo "== ngrok (same fixed public link as on the laptop)"
+if ! command -v ngrok >/dev/null; then
+  curl -fsSL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz | tar -xz -C /usr/local/bin
+fi
+install -d -m 0700 /root/.config/ngrok
+install -m 0600 "$BUNDLE/ngrok.yml" /root/.config/ngrok/ngrok.yml
+install -m 0644 "$BUNDLE/deploy/gcp/nse-tunnel.service" /etc/systemd/system/nse-tunnel.service
+systemctl daemon-reload
+systemctl enable nse-tunnel
+systemctl restart nse-tunnel
+HOST=$(grep -o 'https://[^ ]*' /etc/systemd/system/nse-tunnel.service | head -1 | sed 's#https://##')
+else
 echo "== Caddy (HTTPS for the dashboard; login is handled by the app)"
 if ! command -v caddy >/dev/null; then
   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
@@ -135,13 +148,14 @@ $HOST {
 EOF
 systemctl enable caddy
 systemctl restart caddy
+fi
 
 echo "== unattended security updates"
 dpkg-reconfigure -f noninteractive unattended-upgrades >/dev/null
 
 sleep 15
 echo
-systemctl --no-pager --lines=0 status postgresql clickhouse-server nse-alert nse-dashboard caddy | grep -E '●|Active:'
+systemctl --no-pager --lines=0 status postgresql clickhouse-server nse-alert nse-dashboard nse-tunnel caddy 2>/dev/null | grep -E '●|Active:'
 sudo -u "$APP_USER" bash -c "cd $APP && $APP/venv/bin/python -m alert_system health" || true
 free -m | head -2
 echo

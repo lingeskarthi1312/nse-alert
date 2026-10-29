@@ -24,6 +24,8 @@ echo "== code"
     alert_system config deploy sql tests requirements.txt AUTOMATION.md .env.example \
     $(ls *.py | grep -v -E '\.bak|\.backup') ) | tar -xf - -C "$B"
 cp "$APP/.env" "$B/.env"
+# ngrok authtoken, so the server keeps the same public link
+[ -f /root/.config/ngrok/ngrok.yml ] && cp /root/.config/ngrok/ngrok.yml "$B/ngrok.yml"
 
 echo "== holdings.db (sqlite online backup = consistent copy)"
 "$PY" - "$APP/holdings.db" "$B/data/holdings.db" <<'EOF'

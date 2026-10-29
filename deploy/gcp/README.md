@@ -4,7 +4,7 @@ Moves the alert system off the laptop so alerts, reports and data loading keep r
 
 ## What you get
 - Everything that runs on the laptop today, on one small Google Cloud VM: the scheduler, live alerts, email reports, ClickHouse and the recommendation engine.
-- The **dashboard** at `https://<server-ip>.sslip.io` over HTTPS. Each person signs in with their own email + password and sees only their own data (PostgreSQL row-level security).
+- The **dashboard** at the same fixed ngrok link as on the laptop, https://genetics-upcoming-placate.ngrok-free.dev (the bundle carries the ngrok authtoken). Without an ngrok config the setup falls back to Caddy at `https://<server-ip>.sslip.io`. Each person signs in with their own email + password and sees only their own data (PostgreSQL row-level security).
 - Automatic restart after crashes and VM reboots, plus automatic security updates.
 
 ## Limits and costs (please read)
@@ -38,7 +38,7 @@ Then click **Create**.
 ```
 wsl -u root -- bash /mnt/e/alert/deploy/gcp/export_bundle.sh
 ```
-This creates `E:\alert\deploy\gcp\out\nse-alert-bundle.tar.gz`. It contains your `.env` secrets, so keep it private.
+This creates `E:\alert\deploy\gcp\out\nse-alert-bundle.tar.gz`. It contains your `.env` secrets and the ngrok authtoken, so keep it private.
 
 ### 4. Upload and install on the VM
 In the console, click **SSH** next to the VM. A browser terminal opens. Use **Upload file** (top right) to upload `nse-alert-bundle.tar.gz`, then run:
@@ -56,7 +56,7 @@ sudo -u nsealert bash -c 'cd /opt/nse-alert && venv/bin/python -m alert_system r
 Open the dashboard address and sign in with your own email and password (the same accounts as on the laptop; PostgreSQL data is copied by the bundle).
 
 ### 6. Switch the laptop off (avoid double emails)
-Only **after** step 5 works, run this on the laptop:
+Only **after** step 5 works, run this on the laptop. It also stops the laptop's dashboard and ngrok tunnel; the server's tunnel retries every 10 s and takes over the link within a minute.
 ```
 powershell -ExecutionPolicy Bypass -File E:\alert\deploy\gcp\laptop_switch.ps1 off
 ```
