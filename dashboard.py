@@ -56,7 +56,8 @@ st.set_page_config(page_title="NSE Stock Tracker", page_icon="📈", layout="wid
 
 CSS = """
 <style>
-.block-container {padding-top: 1.2rem; padding-bottom: 2rem; max-width: 1680px;}
+/* Streamlit's fixed top header is 3.75rem tall: start the page below it */
+.block-container {padding-top: 4.25rem; padding-bottom: 2rem; max-width: 1680px;}
 [data-testid="stSidebar"] {background: #0e1627; border-right: 1px solid #1e293b;}
 h1, h2, h3, h4 {letter-spacing: -0.01em;}
 .brand {display:flex; align-items:center; gap:10px; font-size:1.35rem; font-weight:800; color:#fff; margin:4px 0 14px;}
