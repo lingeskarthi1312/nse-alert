@@ -59,6 +59,13 @@ CSS = """
 /* Streamlit's fixed top header is 3.75rem tall: start the page below it */
 .block-container {padding-top: 4.25rem; padding-bottom: 2rem; max-width: 1680px;}
 [data-testid="stSidebar"] {background: #0e1627; border-right: 1px solid #1e293b;}
+/* sidebar open (desktop): shrink the page instead of re-flowing it, so the
+   layout looks the same as with the sidebar closed, just smaller */
+@media (min-width: 992px) {
+  .stApp:has([data-testid="stSidebar"][aria-expanded="true"]) [data-testid="stMainBlockContainer"] {
+    zoom: 0.82; padding-top: 5.2rem;  /* 4.25rem / 0.82: stays clear of the header */
+  }
+}
 h1, h2, h3, h4 {letter-spacing: -0.01em;}
 .brand {display:flex; align-items:center; gap:10px; font-size:1.35rem; font-weight:800; color:#fff; margin:4px 0 14px;}
 .brand span {color:#3b82f6;}
