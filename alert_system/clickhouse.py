@@ -33,17 +33,21 @@ class QueryResult:
 
 
 class Client:
-    def __init__(self, conn):
+    def __init__(self, conn, on_close=None):
         self.conn = conn
+        self._on_close = on_close
+
+    def _execute(self, sql, parameters):
+        return self.conn.cursor(row_factory=tuple_row).execute(sql, parameters or None)
 
     def query(self, sql, parameters=None):
-        cur = self.conn.execute(sql, parameters or None)
+        cur = self._execute(sql, parameters)
         rows = cur.fetchall() if cur.description else []
         return QueryResult(rows, tuple(c.name for c in cur.description or ()))
 
     def command(self, sql, parameters=None):
         """Run a statement; returns the first value of the first row, if any."""
-        cur = self.conn.execute(sql, parameters or None)
+        cur = self._execute(sql, parameters)
         if cur.description:
             row = cur.fetchone()
             return row[0] if row else None
@@ -62,7 +66,10 @@ class Client:
             cur.executemany(sql, [tuple(r) for r in rows])
 
     def close(self):
-        self.conn.close()
+        if self._on_close:
+            self._on_close()
+        else:
+            self.conn.close()
 
 
 def _transient_errors():
@@ -70,7 +77,10 @@ def _transient_errors():
 
 
 def _connect(settings, role):
-    from .pgdb import _connect as pg_connect
+    from .pgdb import _connect as pg_connect, app_connection
+    if role == "app":  # dashboard: read-only queries on a pooled connection
+        ctx = app_connection(settings)
+        return Client(ctx.__enter__(), on_close=lambda: ctx.__exit__(None, None, None))
     return Client(pg_connect(settings, role, autocommit=True, row_factory=tuple_row))
 
 

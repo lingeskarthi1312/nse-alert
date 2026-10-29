@@ -176,11 +176,20 @@ def is_admin():
 
 
 def rows(sql, args=()):
-    with user_tx(settings(), uid()) as conn:
-        return conn.execute(sql, args).fetchall()
+    """Reads are memoised for the current script run only (this session's
+    state, cleared at every rerun and after every write): the same holdings
+    or watchlist query is used by several cards, and each round trip to a
+    hosted database is slow."""
+    memo = st.session_state.setdefault("_run_rows", {})
+    key = (uid(), sql, tuple(args))
+    if key not in memo:
+        with user_tx(settings(), uid()) as conn:
+            memo[key] = conn.execute(sql, args).fetchall()
+    return memo[key]
 
 
 def run(sql, args=()):
+    st.session_state.pop("_run_rows", None)
     with user_tx(settings(), uid()) as conn:
         return conn.execute(sql, args).rowcount
 
@@ -776,15 +785,32 @@ def watch_dialog(a):
         st.rerun()
 
 
-def opportunity_rows(items, key):
-    """Rows with a ♥ button each (filled when already on your watchlist)."""
+def _num(value, fmt="{:,.2f}"):
+    return fmt.format(value) if isinstance(value, (int, float)) else "n/a"
+
+
+def opportunity_rows(items, key, wide=False):
+    """Rows with a ♥ button each (filled when already on your watchlist).
+    wide=True (full-width card) adds category, entry zone, stop and target."""
     watched = my_watchlist()
     widths = [0.25, 1.5, 0.95, 0.85, 0.5, 0.62, 0.45]
+    heads = ["#", "Symbol", "Price ₹", "Signal", "R:R", "Score", ""]
+    if wide:
+        widths = widths[:3] + [0.9, 1.3, 0.8, 0.8] + widths[3:]
+        heads = heads[:3] + ["Category", "Entry ₹", "Stop ₹", "Target ₹"] + heads[3:]
     head = st.columns(widths)
-    for col, h in zip(head, ["#", "Symbol", "Price ₹", "Signal", "R:R", "Score", ""]):
+    for col, h in zip(head, heads):
         col.markdown(f'<span class="note"><b>{h}</b></span>', unsafe_allow_html=True)
     for i, a in enumerate(items, 1):
         c = st.columns(widths, vertical_alignment="center")
+        if wide:
+            small = '<div style="font-size:.85rem">{}</div>'
+            entry = (f"{_num(a.get('entry_low'))} – {_num(a.get('entry_high'))}"
+                     if a.get("entry_low") is not None else "n/a")
+            for col, text in zip(c[3:7], (esc(a.get("category") or "n/a"), entry, _num(a.get("stop")),
+                                          _num(a.get("target1")))):
+                col.markdown(small.format(text), unsafe_allow_html=True)
+            c = c[:3] + c[7:]
         c[0].markdown(f'<span class="note">{i}</span>', unsafe_allow_html=True)
         c[1].markdown(f'<div style="white-space:nowrap;font-weight:700;font-size:.85rem">'
                       f'{esc(a["symbol"].removesuffix(".NS"))}</div>', unsafe_allow_html=True)
@@ -803,7 +829,7 @@ def opportunity_rows(items, key):
 
 def intraday_status_note(snap):
     if not snap:
-        return "Intraday scan has not run yet (weekdays every 15 min, 09:30-14:30 IST)."
+        return "Intraday scan has not run yet (weekdays every 30 min, 09:20-14:20 IST)."
     when = pd.Timestamp(snap["data_time"]).tz_convert(IST).strftime("%d %b %H:%M") if snap.get("data_time") else "n/a"
     status = {"open": "live session", "no_new_entries": "after 14:30 - no new entries, reference only",
               "no_session_data": "no data for today's session (holiday/weekend?)"}.get(snap["status"], snap["status"])
@@ -812,32 +838,32 @@ def intraday_status_note(snap):
             f"{snap['rules']['square_off']} · validation {snap.get('validation', 'UNVALIDATED')}")
 
 
-def intraday_rows(side_key, key, limit):
+def intraday_rows(side_key, key, limit, wide=False):
     snap = read_json("intraday_latest.json")
     st.markdown('<div class="warnbox">Intraday signals use ~15-minute delayed data and are research output, '
                 'not trade instructions. SELL = short-sell (needs an intraday margin product).</div>',
                 unsafe_allow_html=True)
     if snap and snap.get(side_key):
-        opportunity_rows(snap[side_key][:limit], key)
+        opportunity_rows(snap[side_key][:limit], key, wide)
     else:
         st.info("No intraday candidates right now.")
     st.caption(intraday_status_note(snap))
 
 
-def opportunities_card(limit=None):
+def opportunities_card(limit=None, wide=False):
     with st.container(border=True):
         limit = limit or settings().recommendations.get("top_n", 10)
-        h1, h2 = st.columns([1.4, 2], vertical_alignment="center")
+        h1, h2 = st.columns([2, 1.4] if wide else [1.4, 2], vertical_alignment="center")
         with h1:
             card_title(f"Top {limit} Opportunities", "🏆")
         with h2:
             view = st.segmented_control("View", ["Swing", "Intraday BUY", "Intraday SELL"], default="Swing",
                                         key="opp_view", label_visibility="collapsed")
         if view == "Intraday BUY":
-            intraday_rows("buys", "dash_ib", limit)
+            intraday_rows("buys", "dash_ib", limit, wide)
             return
         if view == "Intraday SELL":
-            intraday_rows("sells", "dash_is", limit)
+            intraday_rows("sells", "dash_is", limit, wide)
             return
         snap = read_json("recommendations_latest.json")
         if not snap:
@@ -850,7 +876,7 @@ def opportunities_card(limit=None):
         if not items:
             st.info("No instrument met all criteria today.")
             return
-        opportunity_rows(items, "dash")
+        opportunity_rows(items, "dash", wide)
         st.caption(f"Run {snap['run_date']} · closes as of {items[0]['price_date']} · validation {snap['validation']}")
 
 
@@ -895,16 +921,15 @@ def page_dashboard():
         performance_card()
     with right:
         stock_trend_card()
-    c1, c2, c3, c4 = st.columns([1.05, 0.8, 0.95, 1.6])
+    c1, c2, c3 = st.columns([1.05, 0.8, 0.95])
     with c1:
         drawdown_card()
     with c2:
         monthly_card()
     with c3:
         allocation_card()
-    with c4:
-        opportunities_card()
     recent_alerts_card()
+    opportunities_card(wide=True)
 
 
 def page_portfolio():
@@ -1653,6 +1678,7 @@ def session_valid():
 
 
 # ------------------------------------------------------------- navigation ---
+st.session_state.pop("_run_rows", None)  # per-run read memo (see rows())
 st.logo(str(APP_DIR / "static" / "logo.svg"), size="large")
 
 if not session_valid():

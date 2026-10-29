@@ -2,3 +2,4 @@
 # Background jobs on GitHub Actions use requirements-jobs.txt (no Streamlit).
 -r requirements-jobs.txt
 streamlit==1.65.0   # dashboard.py only
+psycopg-pool==3.2.6   # dashboard: reuse database connections (hosted Postgres is far away)

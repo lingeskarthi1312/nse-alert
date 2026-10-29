@@ -16,22 +16,51 @@ from psycopg.rows import dict_row
 SQL_DIR = Path(__file__).resolve().parent.parent / "sql" / "postgres"
 
 
-def _connect(settings, role, autocommit=False, dbname=None, row_factory=dict_row):
+def _params(settings, role, dbname=None):
     pg = settings.pg
     user, password = {"app": (pg.app_user, pg.app_password), "service": (pg.service_user, pg.service_password),
                       "owner": (pg.owner_user, pg.owner_password)}[role]
     if not password:
         raise RuntimeError(f"PostgreSQL password for role {user} missing (PG_*_PASSWORD in .env)")
-    return psycopg.connect(host=pg.host, port=pg.port, dbname=dbname or pg.dbname, user=user, password=password,
-                           connect_timeout=10, row_factory=row_factory, autocommit=autocommit,
-                           sslmode=pg.sslmode, application_name=f"nse-alert-{role}")
+    return dict(host=pg.host, port=pg.port, dbname=dbname or pg.dbname, user=user, password=password,
+                connect_timeout=10, sslmode=pg.sslmode, application_name=f"nse-alert-{role}")
+
+
+def _connect(settings, role, autocommit=False, dbname=None, row_factory=dict_row):
+    return psycopg.connect(**_params(settings, role, dbname), row_factory=row_factory, autocommit=autocommit)
+
+
+_POOLS = {}
+
+
+@contextmanager
+def app_connection(settings):
+    """Dashboard role connection from a small pool. A hosted database is
+    far away (TLS handshake per connection), so reusing connections makes
+    every page much faster. Falls back to a plain connection without
+    psycopg_pool. Callers run their statements inside a transaction."""
+    try:
+        from psycopg_pool import ConnectionPool
+    except ImportError:
+        with _connect(settings, "app") as conn:
+            yield conn
+        return
+    params = _params(settings, "app")
+    key = tuple(sorted(params.items()))
+    pool = _POOLS.get(key)
+    if pool is None:
+        pool = _POOLS[key] = ConnectionPool(kwargs={**params, "row_factory": dict_row}, min_size=1, max_size=6,
+                                            max_idle=240, check=ConnectionPool.check_connection, open=True,
+                                            name="nse-app")
+    with pool.connection() as conn:
+        yield conn
 
 
 @contextmanager
 def user_tx(settings, user_id):
     if not user_id:
         raise PermissionError("no logged-in user")
-    with _connect(settings, "app") as conn:
+    with app_connection(settings) as conn:
         with conn.transaction():
             conn.execute("SELECT set_config('app.user_id', %s, true)", (str(user_id),))
             yield conn
@@ -40,7 +69,7 @@ def user_tx(settings, user_id):
 @contextmanager
 def anon_tx(settings):
     """App role without a user (login only: auth_* functions)."""
-    with _connect(settings, "app") as conn:
+    with app_connection(settings) as conn:
         with conn.transaction():
             yield conn
 
