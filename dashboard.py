@@ -151,6 +151,15 @@ def read_json(name):
 
 @st.cache_resource
 def settings():
+    # Streamlit Community Cloud: the PG_* etc. values come from the app's
+    # secrets, not from a .env file
+    import os
+    try:
+        for key, value in st.secrets.items():
+            if isinstance(value, (str, int, float, bool)):
+                os.environ.setdefault(key, str(value))
+    except Exception:  # no secrets.toml (laptop / WSL): .env is used
+        pass
     return load_settings()
 
 
