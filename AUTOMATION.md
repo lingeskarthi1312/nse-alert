@@ -299,3 +299,13 @@ python -m alert_system users deactivate --email friend@example.com
 - **`closed`:** the tab is hidden and accounts are invite-only.
 
 Sign-ups go through the `auth_signup()` database function, limited to 20 per hour. The dashboard role still cannot create or edit other users directly.
+
+## Public link (ngrok)
+
+The dashboard is public at **https://genetics-upcoming-placate.ngrok-free.dev**. It's the free static domain on the ngrok account, so the URL stays the same across restarts.
+
+- **Service:** systemd `nse-tunnel` in WSL (unit file: `deploy/nse-tunnel.service`) runs `ngrok http 127.0.0.1:8502 --url=...`.
+- **Authtoken:** stored in `/root/.config/ngrok/ngrok.yml` (via `ngrok config add-authtoken`).
+- **Free-plan warning page:** browser visitors see an ngrok warning page once and click **Visit Site**.
+- **Status:** `systemctl status nse-tunnel`, or `journalctl -u nse-tunnel -o cat | grep url=`.
+- **Locally:** open http://127.0.0.1:8502. `localhost` can hang, because Windows tries IPv6 `::1` first.
