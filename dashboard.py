@@ -660,8 +660,12 @@ def holding_swings(closes):
     return pd.DataFrame(out)
 
 
+# Drawdown / Monthly Returns / Sector Allocation share one row: same height.
+MID_CARD_HEIGHT = 430
+
+
 def drawdown_card():
-    with st.container(border=True):
+    with st.container(border=True, height=MID_CARD_HEIGHT):
         card_title("Drawdown Analysis", "📉")
         closes = st.session_state.get("_closes")
         sw = holding_swings(closes) if closes is not None and not closes.empty else pd.DataFrame()
@@ -685,12 +689,12 @@ def drawdown_card():
                      alt.Tooltip("Worst %:Q", format="+.2f"), alt.Tooltip("From peak %:Q", format=".2f"),
                      "Days held:Q"])
         zero = alt.Chart(pd.DataFrame({"x": [0]})).mark_rule(color="#475569").encode(x="x:Q")
-        st.altair_chart(dark(zero + rng + lo + hi + now, max(140, 46 * len(sw))), width="stretch")
+        st.altair_chart(dark(zero + rng + lo + hi + now, 220), width="stretch")
         st.caption("Bar = lowest to highest % vs buy price since purchase; dot = now.")
 
 
 def monthly_card():
-    with st.container(border=True):
+    with st.container(border=True, height=MID_CARD_HEIGHT):
         card_title("Monthly Returns", "📊")
         series = st.session_state.get("_portfolio_series")
         if series is None or series.empty:
@@ -703,11 +707,11 @@ def monthly_card():
             color=alt.condition("datum.return_pct >= 0", alt.value(GREEN), alt.value(RED)),
             tooltip=[alt.Tooltip("Month:T", timeUnit="yearmonth", title="Month"),
                      alt.Tooltip("return_pct:Q", title="Return %", format="+.2f")])
-        st.altair_chart(dark(chart, 250), width="stretch")
+        st.altair_chart(dark(chart, 320), width="stretch")
 
 
 def allocation_card():
-    with st.container(border=True):
+    with st.container(border=True, height=MID_CARD_HEIGHT):
         card_title("Sector Allocation", "🧭")
         act = holdings()
         prices = latest_prices([h["symbol"] for h in act])
@@ -728,7 +732,7 @@ def allocation_card():
             tooltip=["Sector:N", alt.Tooltip("Value:Q", format=",.0f"), alt.Tooltip("Share %:Q", format=".1f")])
         center = alt.Chart(pd.DataFrame({"t": [f"₹{total:,.0f}"]})).mark_text(
             fontSize=17, fontWeight="bold", color="#fff").encode(text="t:N")
-        st.altair_chart(dark(donut + center, 250), width="stretch")
+        st.altair_chart(dark(donut + center, 270), width="stretch")
         st.caption("Industry from the Nifty index lists (Yahoo profile if unlisted); value at latest close.")
 
 
@@ -928,15 +932,15 @@ def page_dashboard():
         performance_card()
     with right:
         stock_trend_card()
-    c1, c2, c3 = st.columns([1.05, 0.8, 0.95])
+    c1, c2, c3 = st.columns(3)
     with c1:
         drawdown_card()
     with c2:
         monthly_card()
     with c3:
         allocation_card()
-    recent_alerts_card()
     opportunities_card(wide=True)
+    recent_alerts_card()
 
 
 def page_portfolio():
