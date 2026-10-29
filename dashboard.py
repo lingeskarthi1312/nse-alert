@@ -511,8 +511,13 @@ def holding_paths(closes):
     return out
 
 
+# Portfolio Performance and Selected Stock Price Trend sit side by side: same
+# fixed card height so their borders line up.
+TOP_CARD_HEIGHT = 540
+
+
 def performance_card():
-    with st.container(border=True):
+    with st.container(border=True, height=TOP_CARD_HEIGHT):
         h1, h2 = st.columns([2, 3], vertical_alignment="center")
         with h1:
             card_title("Portfolio Performance", "📶")
@@ -588,7 +593,7 @@ def performance_card():
             layers.append(alt.Chart(pd.DataFrame(buys)).mark_point(shape="triangle-up", size=120, filled=True,
                                                                    color="#ffffff").encode(
                 x=x, y=y, tooltip=["Holding:N", alt.Tooltip("Bought:N", title="Purchase")]))
-        st.altair_chart(dark(alt.layer(*layers), 300), width="stretch")
+        st.altair_chart(dark(alt.layer(*layers), 320), width="stretch")
 
 
 def candle_chart(symbol, period):
@@ -610,21 +615,23 @@ def candle_chart(symbol, period):
     up = alt.condition("datum.Open <= datum.Close", alt.value(GREEN), alt.value(RED))
     base = alt.Chart(f).encode(x=alt.X("Date:T", title=None, axis=alt.Axis(labels=False, ticks=False)))
     vol_base = alt.Chart(f).encode(x=alt.X("Date:T", title=None))
-    wick = base.mark_rule().encode(y=alt.Y("Low:Q", scale=alt.Scale(zero=False), title=None), y2="High:Q", color=up)
+    wick = base.mark_rule().encode(y=alt.Y("Low:Q", scale=alt.Scale(zero=False), title=None, axis=alt.Axis(minExtent=55)), y2="High:Q", color=up)
     body = base.mark_bar(size=4).encode(y="Open:Q", y2="Close:Q", color=up,
                                         tooltip=[alt.Tooltip("Date:T"), alt.Tooltip("Open:Q", format=",.2f"),
                                                  alt.Tooltip("High:Q", format=",.2f"), alt.Tooltip("Low:Q", format=",.2f"),
                                                  alt.Tooltip("Close:Q", format=",.2f")])
     ma20 = base.mark_line(color=PURPLE, strokeWidth=1.5).encode(y="MA 20:Q")
     ma50 = base.mark_line(color=ORANGE, strokeWidth=1.5).encode(y="MA 50:Q")
-    vol = vol_base.mark_bar(size=3).encode(y=alt.Y("Volume:Q", title="Volume", axis=alt.Axis(format="~s")),
-                                       color=up).properties(height=70)
-    chart = alt.vconcat((wick + body + ma20 + ma50).properties(height=250), vol, spacing=4)
-    st.altair_chart(dark(chart.resolve_scale(x="shared")), width="stretch")
+    vol = vol_base.mark_bar(size=3).encode(y=alt.Y("Volume:Q", title=None, axis=alt.Axis(format="~s", minExtent=55)),
+                                       color=up)
+    # two charts instead of vconcat: concatenated Vega views ignore the
+    # container width and overflow the card
+    st.altair_chart(dark(wick + body + ma20 + ma50, 255), width="stretch")
+    st.altair_chart(dark(vol, 75), width="stretch")
 
 
 def stock_trend_card(key="dash"):
-    with st.container(border=True):
+    with st.container(border=True, height=TOP_CARD_HEIGHT):
         h1, h2 = st.columns([3, 2], vertical_alignment="center")
         options = watchlist_symbols()
         snap = market_snapshot()
