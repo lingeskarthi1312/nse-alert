@@ -93,8 +93,8 @@ def main():
         existing = set(client.query(f"""
             SELECT symbol, trade_date
             FROM nse_alerts.daily_stock_prices
-            WHERE trade_date >= toDate('{START_DATE}')
-              AND trade_date < toDate('{END_DATE}')
+            WHERE trade_date >= DATE '{START_DATE}'
+              AND trade_date < DATE '{END_DATE}'
         """).result_rows)
 
         latest = {}
@@ -172,7 +172,7 @@ def main():
             print(row)
 
         if DRY_RUN:
-            print("DRY RUN: no ClickHouse price inserts performed.")
+            print("DRY RUN: no price inserts performed.")
             return
 
         # Report failure (so the scheduler retries) when downloads errored

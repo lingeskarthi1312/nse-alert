@@ -129,6 +129,7 @@ class PgSettings:
     service_password: str = field(default="", repr=False)
     owner_user: str = "nse_owner"
     owner_password: str = field(default="", repr=False)
+    sslmode: str = "prefer"   # "require" for hosted Postgres (Neon)
 
     @property
     def configured(self):
@@ -226,6 +227,7 @@ class Settings:
     public_url: str = ""            # dashboard address mentioned in emails
     recommendations: dict = field(default_factory=dict)
     secrets: tuple = field(default=(), repr=False)
+    state_sync: bool = False        # keep state_dir in PostgreSQL app_files (cloud runs)
 
     def job(self, job_id):
         for j in self.jobs:
@@ -543,6 +545,7 @@ def load_settings(env=None, config_path=None, load_env_file=True):
         app_password=_env("PG_APP_PASSWORD", "", env),
         service_password=_env("PG_SERVICE_PASSWORD", "", env),
         owner_password=_env("PG_OWNER_PASSWORD", "", env),
+        sslmode=_env("PG_SSLMODE", "prefer", env),
     )
 
     channels_ok = {"email", "whatsapp", "log"}
@@ -604,4 +607,5 @@ def load_settings(env=None, config_path=None, load_env_file=True):
         recommendations=_validate_recommendations(raw_cfg.get("recommendations")),
         secrets=tuple(s for s in (wa_token, mail_password, ch_password, pg.app_password, pg.service_password,
                                   pg.owner_password, _env("ANTHROPIC_API_KEY", "", env)) if s and len(s) >= 6),
+        state_sync=_env("STATE_SYNC", "file", env).lower() == "pg",
     )

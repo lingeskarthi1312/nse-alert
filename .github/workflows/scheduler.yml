@@ -1,0 +1,54 @@
+# Runs the alert system's scheduler on GitHub Actions (replaces the laptop
+# service). Each tick pulls the scheduler state from PostgreSQL, runs every
+# job that is due (config/alert_system.json, IST times), sends queued emails
+# and pushes the state back.
+#
+# Tick times (cron below is UTC; IST = UTC+5:30):
+#   weekdays 08:50-18:20 IST every 30 min (:20 and :50)
+#   daily    00:20 IST (MTD cleanup)
+#   Saturday 07:20 and 08:20 IST (weekly backtests)
+#   weekends 18:20 IST (daily summary)
+# Private repo: about 25-40 Actions minutes per weekday, inside the free 2000/month.
+#
+# Secret ENV_FILE = the full cloud .env (see deploy/cloud/README.md).
+name: scheduler
+
+on:
+  schedule:
+    - cron: "20,50 3-12 * * 1-5"
+    - cron: "50 18 * * *"
+    - cron: "50 1,2 * * 6"
+    - cron: "50 12 * * 0,6"
+  workflow_dispatch:
+
+concurrency:
+  group: scheduler
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TZ: Asia/Kolkata
+      # not set up yet (or laptop mode): every step is skipped, the run stays green
+      CONFIGURED: ${{ secrets.ENV_FILE != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.CONFIGURED == 'true'
+      - uses: actions/setup-python@v5
+        if: env.CONFIGURED == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-jobs.txt
+      - run: pip install -r requirements-jobs.txt
+        if: env.CONFIGURED == 'true'
+      - name: Write .env from secret
+        if: env.CONFIGURED == 'true'
+        env:
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: printf '%s\n' "$ENV_FILE" > .env
+      - name: Scheduler pass
+        if: env.CONFIGURED == 'true'
+        run: python -m alert_system cloud-tick --budget-minutes 30

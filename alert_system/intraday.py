@@ -99,10 +99,10 @@ def enabled_rules(conn):
 
 def previous_closes(client, symbols, today):
     rows = client.query("""
-        SELECT symbol, argMax(trade_date, trade_date), argMax(close_price, (trade_date, recorded_at))
+        SELECT DISTINCT ON (symbol) symbol, trade_date, close_price
         FROM nse_alerts.daily_stock_prices
-        WHERE symbol IN %(s)s AND trade_date < toDate(%(t)s) AND close_price > 0
-        GROUP BY symbol
+        WHERE symbol = ANY(%(s)s) AND trade_date < %(t)s::date AND close_price > 0
+        ORDER BY symbol, trade_date DESC
     """, parameters={"s": list(symbols), "t": today.isoformat()}).result_rows
     return {s: (d, float(c)) for s, d, c in rows}
 
@@ -144,7 +144,7 @@ def _check_quote(q, p, local_now, today, tz, max_age):
     if age_min > max_age:
         return f"quote {age_min:.0f} min old (stale)"
     if p is None or (today - p[0]).days > 5:
-        return "previous close missing or stale in ClickHouse"
+        return "previous close missing or stale in the price table"
     return None
 
 

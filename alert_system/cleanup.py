@@ -8,19 +8,15 @@ save_mtd_rankings.py compares the latest close against the last close
 further back if needed so no symbol loses its baseline close.
 
 Safety checks before anything is deleted:
-  * target must be listed in config and inside allowed_databases;
-  * table must exist, be a *MergeTree engine, and the date column must be a
-    Date/DateTime type;
+  * target must be listed in config and inside allowed_databases (the
+    PostgreSQL schema, nse_alerts);
+  * table must exist and the date column must be a date/timestamp type;
   * cutoff must be within [month_start - 62 days, month_start];
-  * local date must agree with the ClickHouse server's date (guards against
+  * local date must agree with the database server's date (guards against
     a wrong system clock wiping the current month);
   * rows to keep are counted before and verified after.
 
-Strategy (decided per table from system.tables, not assumed):
-  * PARTITION BY toYYYYMM(<date_column>): DROP PARTITION for months
-    entirely older than the cutoff (cheap metadata operation), then a
-    lightweight DELETE for leftover rows in the boundary partition;
-  * anything else: lightweight DELETE WHERE <date_column> < cutoff.
+Strategy: DELETE WHERE <date_column> < cutoff (the tables are small).
 Every step is idempotent: re-running finds nothing old and reports NOOP.
 """
 import logging
@@ -34,8 +30,7 @@ from .timeutil import local_midnight_utc, month_start
 log = logging.getLogger("alert_system.cleanup")
 
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_PARTITION_ID = re.compile(r"^[A-Za-z0-9_-]+$")
-_DATE_TYPE = re.compile(r"^(Date|Date32|DateTime(64)?(\(.*\))?)$")
+_DATE_TYPE = re.compile(r"^(date|timestamp( with(out)? time zone)?)$")
 MAX_CUTOFF_AGE_DAYS = 62
 BASELINE_FLOOR_DAYS = 45
 
@@ -61,7 +56,7 @@ class TableResult:
 def _q(name):
     if not _IDENT.match(name):
         raise RetentionError(f"unsafe identifier {name!r}")
-    return f"`{name}`"
+    return f'"{name}"'
 
 
 class MTDCleaner:
@@ -79,15 +74,16 @@ class MTDCleaner:
 
     def _counts(self, fq, col, cutoff):
         row = self.client.query(
-            f"SELECT countIf({col} < toDate(%(c)s)), countIf({col} >= toDate(%(c)s)) FROM {fq}",
+            f"SELECT count(*) FILTER (WHERE {col} < %(c)s::date), count(*) FILTER (WHERE {col} >= %(c)s::date) "
+            f"FROM {fq}",
             parameters={"c": cutoff.isoformat()}).result_rows[0]
         return int(row[0]), int(row[1])
 
     def check_clock(self):
-        server_today = self._scalar("SELECT toDate(now(), %(tz)s)", {"tz": self.settings.timezone})
+        server_today = self._scalar("SELECT (now() AT TIME ZONE %(tz)s)::date", {"tz": self.settings.timezone})
         if server_today is None or abs((server_today - self.today).days) > 1:
             raise RetentionError(
-                f"clock mismatch: local date {self.today} vs ClickHouse date {server_today}; "
+                f"clock mismatch: local date {self.today} vs database date {server_today}; "
                 "refusing to delete anything")
 
     def cutoff_for(self, target, fq, col):
@@ -95,9 +91,9 @@ class MTDCleaner:
         if target.baseline_key_column:
             key = _q(target.baseline_key_column)
             earliest_baseline = self._scalar(
-                f"SELECT minOrNull(last_pre) FROM (SELECT {key}, max({col}) AS last_pre FROM {fq} "
-                f"WHERE {col} < toDate(%(ms)s) AND {key} IN "
-                f"(SELECT DISTINCT {key} FROM {fq} WHERE {col} >= toDate(%(ms)s)) GROUP BY {key})",
+                f"SELECT min(last_pre) FROM (SELECT {key}, max({col}) AS last_pre FROM {fq} "
+                f"WHERE {col} < %(ms)s::date AND {key} IN "
+                f"(SELECT DISTINCT {key} FROM {fq} WHERE {col} >= %(ms)s::date) GROUP BY {key}) t",
                 {"ms": self.month_start.isoformat()})
             floor = self.month_start - timedelta(days=BASELINE_FLOOR_DAYS)
             if earliest_baseline is not None and earliest_baseline < cutoff:
@@ -114,21 +110,22 @@ class MTDCleaner:
         if target.database not in self.settings.cleanup_allowed_databases:
             raise RetentionError(f"{target.table} not in allowed databases")
         info = self.client.query(
-            "SELECT engine, partition_key FROM system.tables WHERE database=%(d)s AND name=%(t)s",
+            "SELECT table_type FROM information_schema.tables WHERE table_schema=%(d)s AND table_name=%(t)s",
             parameters={"d": target.database, "t": target.name}).result_rows
         if not info:
             raise RetentionError(f"{target.table} does not exist")
-        engine, partition_key = info[0]
-        if "MergeTree" not in engine:
-            raise RetentionError(f"{target.table}: engine {engine} not supported for retention")
+        engine = info[0][0]
+        if engine != "BASE TABLE":
+            raise RetentionError(f"{target.table}: {engine} not supported for retention")
         col_type = self._scalar(
-            "SELECT type FROM system.columns WHERE database=%(d)s AND table=%(t)s AND name=%(c)s",
+            "SELECT data_type FROM information_schema.columns "
+            "WHERE table_schema=%(d)s AND table_name=%(t)s AND column_name=%(c)s",
             {"d": target.database, "t": target.name, "c": target.date_column})
         if col_type is None:
             raise RetentionError(f"{target.table}: column {target.date_column} missing")
         if not _DATE_TYPE.match(col_type):
-            raise RetentionError(f"{target.table}.{target.date_column} has type {col_type}, expected Date/DateTime")
-        return engine, (partition_key or "").replace(" ", "")
+            raise RetentionError(f"{target.table}.{target.date_column} has type {col_type}, expected date/timestamp")
+        return engine
 
     # -- main -------------------------------------------------------------
     def clean_table(self, target):
@@ -136,21 +133,20 @@ class MTDCleaner:
         col = _q(target.date_column)
         result = TableResult(target.table, cutoff="?")
         try:
-            engine, partition_key = self.inspect(target)
+            engine = self.inspect(target)
             cutoff = self.cutoff_for(target, fq, col)
             result.cutoff = cutoff.isoformat()
             result.rows_old_before, result.rows_kept_before = self._counts(fq, col, cutoff)
             log_event(log, logging.INFO, "mtd cleanup table inspected", component="cleanup",
-                      table=target.table, engine=engine, partition_key=partition_key,
+                      table=target.table, engine=engine,
                       cutoff=result.cutoff, rows_to_remove=result.rows_old_before,
                       rows_to_keep=result.rows_kept_before, dry_run=self.dry_run)
             if result.rows_old_before == 0:
                 result.status = "NOOP"
             elif self.dry_run:
-                monthly = partition_key == f"toYYYYMM({target.date_column})"
-                result.status, result.strategy = "DRY_RUN", "drop_partition+delete" if monthly else "delete"
+                result.status, result.strategy = "DRY_RUN", "delete"
             else:
-                self._delete(target, fq, col, cutoff, partition_key, result)
+                self._delete(fq, col, cutoff, result)
             result.rows_old_after, result.rows_kept_after = self._counts(fq, col, cutoff)
             if not self.dry_run:
                 if result.rows_old_after:
@@ -165,25 +161,9 @@ class MTDCleaner:
                   "mtd cleanup table result", component="cleanup", **asdict(result))
         return result
 
-    def _delete(self, target, fq, col, cutoff, partition_key, result):
-        strategies = []
-        if partition_key == f"toYYYYMM({target.date_column})":
-            parts = self.client.query(
-                f"SELECT _partition_id, max({col}) FROM {fq} GROUP BY _partition_id").result_rows
-            for pid, max_date in parts:
-                if max_date < cutoff:
-                    if not _PARTITION_ID.match(str(pid)):
-                        raise RetentionError(f"unexpected partition id {pid!r}")
-                    self.client.command(f"ALTER TABLE {fq} DROP PARTITION ID '{pid}'")
-                    result.dropped_partitions.append(str(pid))
-            if result.dropped_partitions:
-                strategies.append("drop_partition")
-        remaining, _ = self._counts(fq, col, cutoff)
-        if remaining:
-            self.client.command(f"DELETE FROM {fq} WHERE {col} < toDate(%(c)s)",
-                                parameters={"c": cutoff.isoformat()})
-            strategies.append("lightweight_delete")
-        result.strategy = "+".join(strategies) or "none"
+    def _delete(self, fq, col, cutoff, result):
+        self.client.command(f"DELETE FROM {fq} WHERE {col} < %(c)s::date", parameters={"c": cutoff.isoformat()})
+        result.strategy = "delete"
         result.status = "CLEANED"
 
     def run(self):

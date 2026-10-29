@@ -57,10 +57,9 @@ def watchlist_prices(client, symbols):
     if not symbols:
         return {}
     rows = client.query("""
-        SELECT symbol, trade_date, argMax(close_price, recorded_at) AS close
+        SELECT symbol, trade_date, close_price AS close
         FROM nse_alerts.daily_stock_prices
-        WHERE symbol IN %(s)s AND close_price IS NOT NULL
-        GROUP BY symbol, trade_date
+        WHERE symbol = ANY(%(s)s) AND close_price IS NOT NULL
         ORDER BY symbol, trade_date DESC
     """, parameters={"s": list(symbols)}).result_rows
     out = {}

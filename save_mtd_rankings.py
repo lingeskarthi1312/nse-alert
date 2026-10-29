@@ -22,24 +22,24 @@ try:
                 close_price
             FROM nse_alerts.daily_stock_prices
             WHERE close_price > 0
-              AND trade_date <= toDate(%(as_of)s)
+              AND trade_date <= %(as_of)s::date
         ),
         baseline AS (
-            SELECT
+            SELECT DISTINCT ON (symbol)
                 symbol,
-                argMax(close_price, trade_date) AS baseline_close
+                close_price AS baseline_close
             FROM prices
-            WHERE trade_date < toDate(%(month_start)s)
-            GROUP BY symbol
+            WHERE trade_date < %(month_start)s::date
+            ORDER BY symbol, trade_date DESC
         ),
         latest AS (
-            SELECT
+            SELECT DISTINCT ON (symbol)
                 symbol,
-                argMax(close_price, trade_date) AS latest_close,
-                max(trade_date) AS latest_date
+                close_price AS latest_close,
+                trade_date AS latest_date
             FROM prices
-            WHERE trade_date >= toDate(%(month_start)s)
-            GROUP BY symbol
+            WHERE trade_date >= %(month_start)s::date
+            ORDER BY symbol, trade_date DESC
         )
         SELECT
             l.symbol,
@@ -101,11 +101,9 @@ try:
     # appends a snapshot; do not run repeatedly for the same snapshot.
     # Replace the current month's snapshot before inserting fresh results.
     client.command("""
-        ALTER TABLE nse_alerts.daily_mtd_rankings
-        DELETE WHERE trade_date >= toDate(%(month_start)s)
+        DELETE FROM nse_alerts.daily_mtd_rankings
+        WHERE trade_date >= %(month_start)s::date
     """, parameters={"month_start": MONTH_START})
-
-    client.command("OPTIMIZE TABLE nse_alerts.daily_mtd_rankings FINAL")
 
     client.insert(
         "nse_alerts.daily_mtd_rankings",
@@ -115,13 +113,13 @@ try:
             "mtd_change_pct", "ranking_type",
         ],
     )
-    print("\nSaved MTD rankings to ClickHouse.")
+    print("\nSaved MTD rankings.")
 
     print("\nSaved ranking counts:")
     for row in client.query("""
-        SELECT category, ranking_type, count()
+        SELECT category, ranking_type, count(*)
         FROM nse_alerts.daily_mtd_rankings
-        WHERE trade_date >= toDate(%(month_start)s)
+        WHERE trade_date >= %(month_start)s::date
         GROUP BY category, ranking_type
         ORDER BY category, ranking_type
     """, parameters={"month_start": MONTH_START}).result_rows:

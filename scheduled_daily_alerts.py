@@ -41,7 +41,7 @@ def fetch_prices(symbols):
         rows = client.query("""
             SELECT symbol, trade_date, close_price
             FROM nse_alerts.daily_stock_prices
-            WHERE symbol IN %(s)s AND close_price IS NOT NULL
+            WHERE symbol = ANY(%(s)s) AND close_price IS NOT NULL
             ORDER BY symbol, trade_date DESC, recorded_at DESC
         """, parameters={"s": list(symbols)}).result_rows
     finally:

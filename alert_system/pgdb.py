@@ -16,15 +16,15 @@ from psycopg.rows import dict_row
 SQL_DIR = Path(__file__).resolve().parent.parent / "sql" / "postgres"
 
 
-def _connect(settings, role, autocommit=False, dbname=None):
+def _connect(settings, role, autocommit=False, dbname=None, row_factory=dict_row):
     pg = settings.pg
     user, password = {"app": (pg.app_user, pg.app_password), "service": (pg.service_user, pg.service_password),
                       "owner": (pg.owner_user, pg.owner_password)}[role]
     if not password:
         raise RuntimeError(f"PostgreSQL password for role {user} missing (PG_*_PASSWORD in .env)")
     return psycopg.connect(host=pg.host, port=pg.port, dbname=dbname or pg.dbname, user=user, password=password,
-                           connect_timeout=10, row_factory=dict_row, autocommit=autocommit,
-                           application_name=f"nse-alert-{role}")
+                           connect_timeout=10, row_factory=row_factory, autocommit=autocommit,
+                           sslmode=pg.sslmode, application_name=f"nse-alert-{role}")
 
 
 @contextmanager

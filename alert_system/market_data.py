@@ -36,7 +36,7 @@ def load_universe(client, commodity_cfg=()):
     largest one, as save_mtd_rankings.py does."""
     best = {}
     for symbol, category in client.query(
-            "SELECT DISTINCT symbol, category FROM nse_alerts.stock_categories FINAL").result_rows:
+            "SELECT DISTINCT symbol, category FROM nse_alerts.stock_categories").result_rows:
         if category not in CATEGORY_ORDER:
             continue
         if symbol not in best or CATEGORY_ORDER[category] < CATEGORY_ORDER[best[symbol]]:

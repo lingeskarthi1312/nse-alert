@@ -5,6 +5,7 @@ import logging
 import os
 import signal
 import threading
+import time
 import uuid
 from datetime import timedelta
 
@@ -253,6 +254,31 @@ class Service:
         if online:
             self.outbox.process_due(should_stop=self.stop_event.is_set)
         self.write_health(online)
+
+    def _flush_outbox(self):
+        while self._online() and sum(self.outbox.process_due()) > 0:
+            pass
+
+    def run_once(self, budget_seconds=1500):
+        """One scheduler pass for cron-driven hosting (GitHub Actions): queue
+        every occurrence due since the last pass, run what is due, deliver the
+        outbox, then return. The caller syncs state_dir before and after."""
+        setup_logging(self.settings)
+        log_event(log, logging.INFO, "scheduler pass starting", component="service", version=__version__,
+                  boot_id=self.boot_id, jobs=sorted(self.scheduler.jobs))
+        deadline = time.monotonic() + budget_seconds
+        self.outbox.recover()
+        self.scheduler.startup()
+        self.scheduler.materialise()
+        ran = 0
+        while time.monotonic() < deadline and self.scheduler.run_next(self.stop_event):
+            ran += 1
+            self._flush_outbox()
+        self._flush_outbox()
+        self.write_health(self._online())
+        log_event(log, logging.INFO, "scheduler pass finished", component="service", runs=ran,
+                  outbox=self.outbox.counts())
+        return ran
 
     def run_forever(self):
         settings = self.settings

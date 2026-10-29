@@ -247,10 +247,28 @@ def cmd_run(settings, args):
     return 0
 
 
+def cmd_cloud_tick(settings, args):
+    """One scheduler pass with the state directory kept in PostgreSQL
+    (GitHub Actions: fresh machine every run, no long-running service)."""
+    from . import statesync
+    from .service import Service
+    pulled = statesync.pull(settings)
+    print(f"state pulled: {', '.join(pulled) or 'none (first run)'}")
+    try:
+        ran = Service(settings).run_once(budget_seconds=args.budget_minutes * 60)
+    finally:
+        pushed = statesync.push(settings)
+        print(f"state pushed: {', '.join(pushed)}")
+    print(f"runs executed: {ran}")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="python -m alert_system")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("run")
+    p = sub.add_parser("cloud-tick")
+    p.add_argument("--budget-minutes", type=int, default=25)
     sub.add_parser("check-config")
     p = sub.add_parser("status")
     p.add_argument("--limit", type=int, default=25)
@@ -280,7 +298,7 @@ def main(argv=None):
     p.add_argument("--user", help="email of the user (default for --preview: first admin; else all users)")
     args = parser.parse_args(argv)
     settings = _settings_or_exit()
-    handler = {"run": cmd_run, "check-config": cmd_check_config, "status": cmd_status, "health": cmd_health,
+    handler = {"run": cmd_run, "cloud-tick": cmd_cloud_tick, "check-config": cmd_check_config, "status": cmd_status, "health": cmd_health,
                "trigger": cmd_trigger, "cleanup": cmd_cleanup, "outbox-requeue": cmd_outbox_requeue,
                "recommend": cmd_recommend, "backtest": cmd_backtest, "report": cmd_report,
                "live": cmd_live, "db-migrate": cmd_db_migrate, "db-import-sqlite": cmd_db_import_sqlite,

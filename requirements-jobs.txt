@@ -1,0 +1,10 @@
+# Background jobs (GitHub Actions, python -m alert_system cloud-tick).
+# Market data moved from ClickHouse to PostgreSQL on 2026-10-29.
+yfinance==1.7.0
+requests==2.34.2
+python-dotenv==1.2.4
+psycopg[binary]==3.2.10   # PostgreSQL (multi-user data with row-level security + market data)
+pandas==2.3.3
+
+# tests
+pytest==9.1.1

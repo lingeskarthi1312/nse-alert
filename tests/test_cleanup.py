@@ -1,8 +1,9 @@
 """MTD boundary + cleanup safety tests.
 
-The ClickHouse tests create a throw-away database alert_test_<random> with
-the production table definitions, and drop it afterwards. They never touch
-nse_alerts. Skipped automatically when no ClickHouse server is reachable.
+The market-data tests create a throw-away schema alert_test_<random> in the
+PostgreSQL test database (nse_app_test) with the production table
+definitions, and drop it afterwards. They never touch nse_alerts. Skipped
+automatically when PostgreSQL is not configured.
 """
 import uuid
 from datetime import date, timedelta
@@ -101,21 +102,21 @@ class _Result:
 
 
 class ScriptedClient:
-    def __init__(self, tables=None, column_type="Date", server_today=date(2026, 10, 19)):
+    def __init__(self, tables=None, column_type="date", server_today=date(2026, 10, 19)):
         self.tables = tables or {}
         self.column_type = column_type
         self.server_today = server_today
         self.commands = []
 
     def query(self, sql, parameters=None):
-        if "FROM system.tables" in sql:
+        if "FROM information_schema.tables" in sql:
             t = self.tables.get((parameters["d"], parameters["t"]))
             return _Result([t] if t else [])
-        if "FROM system.columns" in sql:
+        if "FROM information_schema.columns" in sql:
             return _Result([(self.column_type,)])
-        if "toDate(now()" in sql:
+        if "AT TIME ZONE" in sql:
             return _Result([(self.server_today,)])
-        if "countIf" in sql:
+        if "FILTER" in sql:
             return _Result([(5, 5)])
         return _Result([(None,)])
 
@@ -136,55 +137,43 @@ def test_missing_table_is_error_and_nothing_deleted(settings_factory):
 
 def test_non_date_column_is_refused(settings_factory):
     s = _target_settings(settings_factory)
-    client = ScriptedClient({("nse_alerts", "daily_mtd_rankings"): ("MergeTree", "")}, column_type="String")
+    client = ScriptedClient({("nse_alerts", "daily_mtd_rankings"): ("BASE TABLE",)}, column_type="text")
     [res] = MTDCleaner(s, client, date(2026, 10, 19)).run()
-    assert res.status == "ERROR" and "expected Date" in res.error and client.commands == []
+    assert res.status == "ERROR" and "expected date" in res.error and client.commands == []
 
 
-def test_non_mergetree_engine_is_refused(settings_factory):
+def test_view_is_refused(settings_factory):
     s = _target_settings(settings_factory)
-    client = ScriptedClient({("nse_alerts", "daily_mtd_rankings"): ("Log", "")})
+    client = ScriptedClient({("nse_alerts", "daily_mtd_rankings"): ("VIEW",)})
     [res] = MTDCleaner(s, client, date(2026, 10, 19)).run()
     assert res.status == "ERROR" and client.commands == []
 
 
 def test_clock_mismatch_refuses_everything(settings_factory):
     s = _target_settings(settings_factory)
-    client = ScriptedClient({("nse_alerts", "daily_mtd_rankings"): ("MergeTree", "")},
+    client = ScriptedClient({("nse_alerts", "daily_mtd_rankings"): ("BASE TABLE",)},
                             server_today=date(2026, 10, 19))
     with pytest.raises(RetentionError, match="clock mismatch"):
         MTDCleaner(s, client, date(2027, 3, 1)).run()
     assert client.commands == []
 
 
-# --- real ClickHouse integration ---------------------------------------------------
-
-PRICES_DDL = """CREATE TABLE {db}.daily_stock_prices (
-    symbol String, trade_date Date, open_price Nullable(Float64), high_price Nullable(Float64),
-    low_price Nullable(Float64), close_price Nullable(Float64), volume Nullable(UInt64),
-    recorded_at DateTime DEFAULT now())
-ENGINE = MergeTree PARTITION BY toYYYYMM(trade_date) ORDER BY (symbol, trade_date)"""
-RANKINGS_DDL = """CREATE TABLE {db}.daily_mtd_rankings (
-    trade_date Date, symbol String, category String, close_price Nullable(Float64),
-    mtd_change_pct Nullable(Float64), ranking_type String, recorded_at DateTime DEFAULT now())
-ENGINE = MergeTree ORDER BY (trade_date, category, ranking_type, symbol)"""
-CATEGORIES_DDL = """CREATE TABLE {db}.stock_categories (symbol String, category String,
-    updated_at DateTime DEFAULT now()) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (category, symbol)"""
-
+# --- real PostgreSQL integration ----------------------------------------------------
 
 @pytest.fixture
-def ch(settings_factory):
-    clickhouse_connect = pytest.importorskip("clickhouse_connect")
-    try:
-        client = clickhouse_connect.get_client(host="127.0.0.1", port=8123, username="default",
-                                               connect_timeout=3)
-        client.command("SELECT 1")
-    except Exception as exc:
-        pytest.skip(f"ClickHouse not reachable: {exc}")
+def ch(pg_settings, settings_factory):
+    from psycopg.rows import tuple_row
+
+    from alert_system.clickhouse import Client
+    from alert_system.pgdb import owner_connect
+    base = pg_settings()
     db = f"alert_test_{uuid.uuid4().hex[:10]}"
-    client.command(f"CREATE DATABASE {db}")
-    for ddl in (PRICES_DDL, RANKINGS_DDL, CATEGORIES_DDL):
-        client.command(ddl.format(db=db))
+    conn = owner_connect(base)
+    conn.row_factory = tuple_row
+    client = Client(conn)
+    client.command(f"CREATE SCHEMA {db}")
+    for t in ("daily_stock_prices", "daily_mtd_rankings", "stock_categories"):
+        client.command(f"CREATE TABLE {db}.{t} (LIKE nse_alerts.{t} INCLUDING ALL)")
     s = settings_factory(allowed=(db,), targets=[
         {"table": f"{db}.daily_stock_prices", "date_column": "trade_date",
          "baseline_lookback_days": 10, "baseline_key_column": "symbol"},
@@ -192,8 +181,14 @@ def ch(settings_factory):
     try:
         yield client, db, s
     finally:
-        client.command(f"DROP DATABASE IF EXISTS {db}")
+        client.command(f"DROP SCHEMA IF EXISTS {db} CASCADE")
         client.close()
+
+
+def _insert(client, table, rows, column_names):
+    marks = ", ".join(["%s"] * len(column_names))
+    with client.conn.cursor() as cur:
+        cur.executemany(f"INSERT INTO {table} ({', '.join(column_names)}) VALUES ({marks})", rows)
 
 
 def _days(start, end):
@@ -205,7 +200,7 @@ def _days(start, end):
 
 def _load_prices(client, db, symbols, start, end):
     rows = [(s, d, 1.0, 1.0, 1.0, 100.0, 10) for s in symbols for d in _days(start, end)]
-    client.insert(f"{db}.daily_stock_prices", rows, column_names=[
+    _insert(client, f"{db}.daily_stock_prices", rows, column_names=[
         "symbol", "trade_date", "open_price", "high_price", "low_price", "close_price", "volume"])
 
 
@@ -213,27 +208,26 @@ def _count(client, sql):
     return client.query(sql).result_rows[0][0]
 
 
-def test_ch_prices_partition_drop_plus_boundary_delete_idempotent(ch):
+def test_pg_prices_delete_before_cutoff_idempotent(ch):
     client, db, s = ch
     _load_prices(client, db, ["A.NS", "B.NS"], date(2026, 8, 20), date(2026, 10, 19))
-    client.insert(f"{db}.stock_categories", [("A.NS", "Large-cap")], column_names=["symbol", "category"])
-    kept_expected = _count(client, f"SELECT count() FROM {db}.daily_stock_prices WHERE trade_date >= '2026-09-21'")
+    _insert(client, f"{db}.stock_categories", [("A.NS", "Large-cap")], column_names=["symbol", "category"])
+    kept_expected = _count(client, f"SELECT count(*) FROM {db}.daily_stock_prices WHERE trade_date >= '2026-09-21'")
 
     cleaner = MTDCleaner(s, client, date(2026, 10, 19))
     res = cleaner.clean_table(s.cleanup_targets[0])
     assert res.status == "CLEANED", res.error
     assert res.cutoff == "2026-09-21"
-    assert res.dropped_partitions == ["202608"]
-    assert res.strategy == "drop_partition+lightweight_delete"
+    assert res.strategy == "delete"
     assert _count(client, f"SELECT min(trade_date) FROM {db}.daily_stock_prices") == date(2026, 9, 21)
-    assert _count(client, f"SELECT count() FROM {db}.daily_stock_prices") == kept_expected
-    assert _count(client, f"SELECT count() FROM {db}.stock_categories") == 1  # untouched
+    assert _count(client, f"SELECT count(*) FROM {db}.daily_stock_prices") == kept_expected
+    assert _count(client, f"SELECT count(*) FROM {db}.stock_categories") == 1  # untouched
 
     again = cleaner.clean_table(s.cleanup_targets[0])
     assert again.status == "NOOP" and again.rows_kept_after == kept_expected
 
 
-def test_ch_baseline_guard_extends_cutoff(ch):
+def test_pg_baseline_guard_extends_cutoff(ch):
     client, db, s = ch
     _load_prices(client, db, ["A.NS"], date(2026, 9, 1), date(2026, 10, 19))
     # C.NS last traded 2026-09-15 before the month, then again in October
@@ -245,35 +239,35 @@ def test_ch_baseline_guard_extends_cutoff(ch):
                           "WHERE symbol='C.NS' AND trade_date < '2026-10-01'") == date(2026, 9, 15)
 
 
-def test_ch_rankings_unpartitioned_lightweight_delete_on_new_month(ch):
+def test_pg_rankings_delete_on_new_month(ch):
     client, db, s = ch
     rows = [(d, "X.NS", "Large-cap", 1.0, 2.0, "GAINER") for d in _days(date(2026, 10, 1), date(2026, 10, 30))]
     rows += [(date(2026, 11, 2), "X.NS", "Large-cap", 1.0, 2.0, "GAINER")]
-    client.insert(f"{db}.daily_mtd_rankings", rows, column_names=[
+    _insert(client, f"{db}.daily_mtd_rankings", rows, column_names=[
         "trade_date", "symbol", "category", "close_price", "mtd_change_pct", "ranking_type"])
     res = MTDCleaner(s, client, date(2026, 11, 2)).clean_table(s.cleanup_targets[1])
-    assert res.status == "CLEANED" and res.strategy == "lightweight_delete" and res.cutoff == "2026-11-01"
+    assert res.status == "CLEANED" and res.strategy == "delete" and res.cutoff == "2026-11-01"
     assert res.rows_old_before == 30 and res.rows_kept_after == 1
-    assert _count(client, f"SELECT count() FROM {db}.daily_mtd_rankings") == 1
+    assert _count(client, f"SELECT count(*) FROM {db}.daily_mtd_rankings") == 1
 
 
-def test_ch_dry_run_deletes_nothing(ch):
+def test_pg_dry_run_deletes_nothing(ch):
     client, db, s = ch
     _load_prices(client, db, ["A.NS"], date(2026, 8, 1), date(2026, 10, 19))
-    before = _count(client, f"SELECT count() FROM {db}.daily_stock_prices")
+    before = _count(client, f"SELECT count(*) FROM {db}.daily_stock_prices")
     res = MTDCleaner(s, client, date(2026, 10, 19), dry_run=True).clean_table(s.cleanup_targets[0])
     assert res.status == "DRY_RUN" and res.rows_old_before > 0
-    assert _count(client, f"SELECT count() FROM {db}.daily_stock_prices") == before
+    assert _count(client, f"SELECT count(*) FROM {db}.daily_stock_prices") == before
 
 
-def test_ch_full_run_with_clock_check(ch):
+def test_pg_full_run_with_clock_check(ch):
     client, db, s = ch
     _load_prices(client, db, ["A.NS"], date(2026, 9, 1), local_today("Asia/Kolkata"))
     results = MTDCleaner(s, client, local_today("Asia/Kolkata")).run()
     assert all(r.status in ("CLEANED", "NOOP") for r in results), [r.error for r in results]
 
 
-def test_ch_disallowed_database_never_touched(ch, settings_factory):
+def test_pg_disallowed_schema_never_touched(ch, settings_factory):
     client, db, _ = ch
     s = settings_factory(allowed=("nse_alerts",), targets=[
         {"table": "nse_alerts.daily_mtd_rankings", "date_column": "trade_date"}])

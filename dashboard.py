@@ -11,7 +11,7 @@ returns that user's holdings, rules, watchlist, alerts and emails.
 
 Data sources (no data is invented; missing data is shown as "n/a"):
   * PostgreSQL nse_app (RLS)         - per-user holdings, rules, watchlist, alerts, emails
-  * ClickHouse nse_alerts.*          - shared market data: daily closes, rankings
+  * PostgreSQL nse_alerts.*          - shared market data: daily closes, rankings
   * Yahoo Finance (yfinance, cached) - price history for charts, current prices
   * Nifty Indices lists              - company names and industries
   * state/*.json                     - latest recommendations, backtest, live quotes, health
@@ -142,11 +142,11 @@ def dark(chart, height=None):
             .configure_view(strokeWidth=0))
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def read_json(name):
-    try:
-        return json.loads((STATE / name).read_text())
-    except (OSError, ValueError):
-        return None
+    """Latest job snapshot (state/ locally, PostgreSQL app_files in the cloud)."""
+    from alert_system.statesync import read_json as load
+    return load(settings(), name)
 
 
 @st.cache_resource
@@ -182,6 +182,7 @@ def stock_directory():
     (Nifty 100 / Midcap 150 / Smallcap 250), cached in state/ for offline use."""
     import io
     import requests
+    STATE.mkdir(exist_ok=True)
     cache = STATE / "stock_directory.json"
     out, seen = [], set()
     try:
@@ -229,14 +230,13 @@ def normalize_symbol(text):
 # ------------------------------------------------------------- data layer ---
 @st.cache_data(ttl=300, show_spinner=False)
 def market_snapshot():
-    """Latest close + daily/weekly/MTD change per symbol from stored ClickHouse closes."""
-    client = get_client(settings())
+    """Latest close + daily/weekly/MTD change per symbol from the stored daily closes."""
+    client = get_client(settings(), role="app")
     try:
         px = client.query("""
-            SELECT symbol, trade_date, argMax(close_price, recorded_at) AS close
-            FROM nse_alerts.daily_stock_prices WHERE close_price > 0
-            GROUP BY symbol, trade_date""").result_rows
-        cats = client.query("SELECT DISTINCT symbol, category FROM nse_alerts.stock_categories FINAL").result_rows
+            SELECT symbol, trade_date, close_price AS close
+            FROM nse_alerts.daily_stock_prices WHERE close_price > 0""").result_rows
+        cats = client.query("SELECT DISTINCT symbol, category FROM nse_alerts.stock_categories").result_rows
     finally:
         client.close()
     order = {"Large-cap": 0, "Mid-cap": 1, "Small-cap": 2}
@@ -266,17 +266,17 @@ def market_snapshot():
 
 @st.cache_data(ttl=300, show_spinner=False)
 def latest_trade_date():
-    client = get_client(settings())
+    client = get_client(settings(), role="app")
     try:
         value = client.command("SELECT max(trade_date) FROM nse_alerts.daily_stock_prices")
     finally:
         client.close()
-    return pd.Timestamp(value).date()  # command() returns text
+    return pd.Timestamp(value).date()
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def mtd_rankings():
-    client = get_client(settings())
+    client = get_client(settings(), role="app")
     try:
         r = client.query("""SELECT trade_date, symbol, category, close_price, mtd_change_pct, ranking_type
                             FROM nse_alerts.daily_mtd_rankings""").result_rows
@@ -357,7 +357,7 @@ def live_quotes(symbols):
 
 def latest_prices(symbols):
     """{symbol: (price, date)}: live quote when it is at least as recent as the
-    stored close, else the stored ClickHouse close, else Yahoo daily history."""
+    stored close, else the stored daily close, else Yahoo daily history."""
     snap = market_snapshot()
     out = {}
     if not snap.empty:
@@ -1272,7 +1272,7 @@ def page_analytics():
     top_bar("Analytics", "Market breadth from stored daily closes.")
     snap = market_snapshot()
     if snap.empty:
-        st.warning("No stored prices in ClickHouse yet.")
+        st.warning("No stored prices yet.")
         return
     ok = snap.dropna(subset=["MTD %"])
     cols = st.columns(4)
@@ -1311,10 +1311,10 @@ def page_analytics():
 
 
 def page_market_data():
-    top_bar("Market Data", "Stored daily closes for the tracked universe (ClickHouse).")
+    top_bar("Market Data", "Stored daily closes for the tracked universe.")
     snap = market_snapshot()
     if snap.empty:
-        st.warning("No stored prices in ClickHouse yet.")
+        st.warning("No stored prices yet.")
         return
     fmt = {"Close": st.column_config.NumberColumn(format="₹%.2f")} | {
         c: st.column_config.NumberColumn(format="%+.2f%%") for c in ("Day %", "Week %", "MTD %")}
@@ -1352,7 +1352,7 @@ def page_reports():
     s = settings()
     from alert_system.report import build_report, report_settings_for
     user = me()
-    client = get_client(s)
+    client = get_client(s, role="app")
     try:
         built = build_report(s, client, datetime.now(IST), user)
     finally:
@@ -1514,6 +1514,10 @@ def page_settings():
         return
     import sqlite3  # scheduler state (system-level, not user data)
     s = settings()
+    if s.state_sync:  # cloud: the scheduler DB lives in app_files
+        from alert_system.statesync import read_bytes
+        STATE.mkdir(exist_ok=True)
+        s.scheduler_db.write_bytes(read_bytes(s, s.scheduler_db.name) or b"")
     health = read_json("health.json") or {}
     c1, c2, c3, c4 = st.columns(4)
     kpi_card(c1, "🩺", "Service heartbeat",

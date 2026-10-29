@@ -22,39 +22,6 @@ from .timeutil import local_today, to_iso
 log = logging.getLogger("alert_system.reco_job")
 
 TABLE = "nse_alerts.recommendations"
-DDL = f"""
-CREATE TABLE IF NOT EXISTS {TABLE}
-(
-    run_date Date,
-    generated_at DateTime,
-    ranking LowCardinality(String),
-    rank UInt8,
-    symbol String,
-    name String,
-    asset_class LowCardinality(String),
-    category LowCardinality(String),
-    exchange LowCardinality(String),
-    price Float64,
-    price_date Date,
-    signal LowCardinality(String),
-    score Float64,
-    components String,
-    entry_low Nullable(Float64),
-    entry_high Nullable(Float64),
-    stop Nullable(Float64),
-    target1 Nullable(Float64),
-    target2 Nullable(Float64),
-    risk_reward Nullable(Float64),
-    horizon String,
-    confidence LowCardinality(String),
-    validation LowCardinality(String),
-    reasons String,
-    risks String
-)
-ENGINE = MergeTree
-PARTITION BY toYYYYMM(run_date)
-ORDER BY (run_date, ranking, rank)
-"""
 COLUMNS = ["run_date", "generated_at", "ranking", "rank", "symbol", "name", "asset_class", "category", "exchange",
            "price", "price_date", "signal", "score", "components", "entry_low", "entry_high", "stop", "target1",
            "target2", "risk_reward", "horizon", "confidence", "validation", "reasons", "risks"]
@@ -101,9 +68,8 @@ def run_recommendations(settings, client, now):
                          json.dumps(a.components), a.entry_low, a.entry_high, a.stop, a.target1, a.target2,
                          a.risk_reward, a.horizon or "", a.confidence or "", validation,
                          " | ".join(a.reasons), " | ".join(a.risks)])
-    client.command(DDL)
-    # Idempotent: replace this day's snapshot (lightweight delete, then insert).
-    client.command(f"DELETE FROM {TABLE} WHERE run_date = toDate(%(d)s)", parameters={"d": today.isoformat()})
+    # Idempotent: replace this day's snapshot (delete, then insert).
+    client.command(f"DELETE FROM {TABLE} WHERE run_date = %(d)s::date", parameters={"d": today.isoformat()})
     if rows:
         client.insert(TABLE, rows, column_names=COLUMNS)
     commodities = [a.to_dict() for a in results if a.asset_class != "Equity"]

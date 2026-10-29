@@ -68,9 +68,9 @@
     },
     {
       "id": "intraday_alerts",
-      "description": "Live (Yahoo, ~15 min delayed) check of watchlist alert rules every 5 min in market hours",
-      "_schedules_note": "09:15-15:45 IST weekdays; polls run until 15:45 because the free feed lags ~15 min",
-      "schedules": ["15-55/5 9 * * 1-5", "*/5 10-14 * * 1-5", "0-45/5 15 * * 1-5"],
+      "description": "Live (Yahoo, ~15 min delayed) check of watchlist alert rules every 30 min in market hours",
+      "_schedules_note": "09:20-15:50 IST weekdays at :20/:50 = the GitHub Actions tick times (private repo: 2000 free min/month). Laptop schedule was every 5 min: 15-55/5 9, */5 10-14, 0-45/5 15",
+      "schedules": ["20,50 9-15 * * 1-5"],
       "builtin": "intraday_alerts",
       "needs_internet": true,
       "needs_clickhouse": true,
@@ -84,8 +84,8 @@
     },
     {
       "id": "intraday_reco",
-      "description": "Intraday BUY/SELL scan on 5-minute bars every 15 min (09:30-14:30 IST)",
-      "schedules": ["30-45/15 9 * * 1-5", "*/15 10-13 * * 1-5", "0-30/15 14 * * 1-5"],
+      "description": "Intraday BUY/SELL scan on 5-minute bars every 30 min (09:20-14:20 IST, at the GitHub Actions tick times)",
+      "schedules": ["20,50 9-13 * * 1-5", "20 14 * * 1-5"],
       "builtin": "intraday_reco",
       "needs_internet": true,
       "needs_clickhouse": true,

@@ -1,12 +1,4 @@
-# Versions installed in /root/nse-alert-venv (WSL) and on the cloud server.
-# psycopg was added for the multi-user PostgreSQL database (row-level security).
-clickhouse-connect==1.10.0
-yfinance==1.7.0
-requests==2.34.2
-python-dotenv==1.2.4
-psycopg[binary]==3.2.10   # PostgreSQL (multi-user data, row-level security)
-pandas==2.3.3
+# Dashboard (Streamlit Community Cloud installs this file) and local dev.
+# Background jobs on GitHub Actions use requirements-jobs.txt (no Streamlit).
+-r requirements-jobs.txt
 streamlit==1.65.0   # dashboard.py only
-
-# tests
-pytest==9.1.1
