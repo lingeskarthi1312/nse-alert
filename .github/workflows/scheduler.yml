@@ -8,7 +8,7 @@
 #   daily    00:20 IST (MTD cleanup)
 #   Saturday 07:20 and 08:20 IST (weekly backtests)
 #   weekends 18:20 IST (daily summary)
-# Private repo: about 25-40 Actions minutes per weekday, inside the free 2000/month.
+# Public repo: Actions minutes are free. Live alerts (every minute) run in live.yml.
 #
 # Secret ENV_FILE = the full cloud .env (see deploy/cloud/README.md).
 name: scheduler
@@ -24,6 +24,10 @@ on:
 concurrency:
   group: scheduler
   cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
 
 jobs:
   tick:
@@ -49,6 +53,22 @@ jobs:
         env:
           ENV_FILE: ${{ secrets.ENV_FILE }}
         run: printf '%s\n' "$ENV_FILE" > .env
+      # Live alerts run in their own long workflow (live.yml) during market
+      # hours; start it if no live run is queued or running.
+      - name: Start live alerts
+        if: env.CONFIGURED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          now=$(date +%H%M); dow=$(date +%u)
+          if [ "$dow" -le 5 ] && [ "$now" -ge 0845 ] && [ "$now" -lt 1545 ]; then
+            active=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow live.yml --limit 5 \
+                     --json status --jq '[.[] | select(.status != "completed")] | length')
+            if [ "$active" = 0 ]; then
+              gh workflow run live.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
+              echo "live alerts started"
+            fi
+          fi
       - name: Scheduler pass
         if: env.CONFIGURED == 'true'
         run: python -m alert_system cloud-tick --budget-minutes 30

@@ -1,0 +1,57 @@
+# Live alerts for the whole NSE session: one long run checks every user's
+# enabled rules once a minute (python -m alert_system live-loop) and emails a
+# triggered alert straight away. The scheduler workflow starts it on its first
+# tick after 08:45 IST on weekdays. A GitHub job may run at most 6 hours, so
+# the loop stops after 340 minutes and starts its own successor if the
+# session is still open. Needs a public repo (unlimited Actions minutes).
+#
+# While the loop runs it holds a PostgreSQL advisory lock and the scheduler's
+# 30-minute intraday_alerts job stands down, so nobody gets an alert twice.
+name: live-alerts
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: live-alerts
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      TZ: Asia/Kolkata
+      CONFIGURED: ${{ secrets.ENV_FILE != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.CONFIGURED == 'true'
+      - uses: actions/setup-python@v5
+        if: env.CONFIGURED == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-jobs.txt
+      - run: pip install -r requirements-jobs.txt
+        if: env.CONFIGURED == 'true'
+      - name: Write .env from secret
+        if: env.CONFIGURED == 'true'
+        env:
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: printf '%s\n' "$ENV_FILE" > .env
+      - name: Live loop
+        if: env.CONFIGURED == 'true'
+        run: python -m alert_system live-loop --interval 60 --max-minutes 340
+      - name: Start the next live run if the session is still open
+        if: always() && env.CONFIGURED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          now=$(date +%H%M); dow=$(date +%u)
+          if [ "$dow" -le 5 ] && [ "$now" -lt 1545 ]; then
+            gh workflow run live.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
+          fi

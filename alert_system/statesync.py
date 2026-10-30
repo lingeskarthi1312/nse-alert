@@ -28,12 +28,17 @@ def pull(settings):
 
 
 def push(settings):
-    from .pgdb import service_tx
     db = settings.scheduler_db
     if db.exists():  # fold any WAL into the main file before copying it
         with sqlite3.connect(db) as conn:
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     files = sorted(p for p in settings.state_dir.iterdir() if _synced(p))
+    return push_files(settings, files)
+
+
+def push_files(settings, files):
+    """Upload just these state files (the live loop must not overwrite scheduler.db)."""
+    from .pgdb import service_tx
     with service_tx(settings) as conn:
         for p in files:
             conn.execute("INSERT INTO app_files (name, data, updated_at) VALUES (%s, %s, now()) "

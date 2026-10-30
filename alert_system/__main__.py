@@ -148,6 +148,45 @@ def cmd_live(settings, args):
     return 0
 
 
+def cmd_live_loop(settings, args):
+    """Live alerts for the whole market session (GitHub Actions): check the
+    rules every --interval seconds and send the emails straight away, until
+    the session ends or --max-minutes pass. Only one loop runs at a time;
+    meanwhile the scheduler's 30-minute intraday_alerts job stands down."""
+    import time
+    from zoneinfo import ZoneInfo
+    from . import intraday, statesync
+    from .logging_setup import setup_logging
+    from .service import Service
+    setup_logging(settings)
+    tz = ZoneInfo(settings.timezone)
+    deadline = time.monotonic() + args.max_minutes * 60
+    with intraday.live_loop_lock(settings) as held:
+        if not held:
+            print("another live loop is already running")
+            return 0
+        svc = Service(settings)
+        polls = fired = 0
+        while time.monotonic() < deadline:
+            local_now = utcnow().astimezone(tz)
+            if local_now.weekday() >= 5 or local_now.time() > intraday.POLL_END:
+                break
+            if local_now.time() >= intraday.SESSION_OPEN:
+                try:
+                    result = svc.intraday_alerts(None, None, 0)
+                    svc._flush_outbox()
+                    polls += 1
+                    fired += len(result.get("triggered", []))
+                    quotes = settings.state_dir / "live_quotes.json"
+                    if quotes.exists():
+                        statesync.push_files(settings, [quotes])
+                except Exception as exc:  # one bad poll (network, Yahoo) must not end the session
+                    print(f"poll failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            time.sleep(args.interval)
+    print(f"live loop done: {polls} poll(s), {fired} alert(s)")
+    return 0
+
+
 def cmd_backtest(settings, args):
     report = _service_for_cli(settings).backtest(None, None, 0)
     print(json.dumps({k: report[k] for k in ("validation", "validation_checks", "overall", "segments",
@@ -282,6 +321,9 @@ def main(argv=None):
     sub.add_parser("recommend")
     sub.add_parser("backtest")
     sub.add_parser("live")
+    p = sub.add_parser("live-loop")
+    p.add_argument("--interval", type=int, default=60, help="seconds between checks")
+    p.add_argument("--max-minutes", type=int, default=340, help="stop after this long (GitHub job limit is 6 h)")
     p = sub.add_parser("intraday")
     p.add_argument("--backtest", action="store_true", help="run the 59-day 5-minute backtest instead of a scan")
     sub.add_parser("db-migrate")
@@ -301,7 +343,7 @@ def main(argv=None):
     handler = {"run": cmd_run, "cloud-tick": cmd_cloud_tick, "check-config": cmd_check_config, "status": cmd_status, "health": cmd_health,
                "trigger": cmd_trigger, "cleanup": cmd_cleanup, "outbox-requeue": cmd_outbox_requeue,
                "recommend": cmd_recommend, "backtest": cmd_backtest, "report": cmd_report,
-               "live": cmd_live, "db-migrate": cmd_db_migrate, "db-import-sqlite": cmd_db_import_sqlite,
+               "live": cmd_live, "live-loop": cmd_live_loop, "db-migrate": cmd_db_migrate, "db-import-sqlite": cmd_db_import_sqlite,
                "users": cmd_users, "intraday": cmd_intraday}[args.cmd]
     return handler(settings, args)
 

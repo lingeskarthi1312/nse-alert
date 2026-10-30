@@ -20,6 +20,7 @@ session's close (from ClickHouse) and applies the rule ("Below or equal" /
 """
 import json
 import logging
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, time as dtime
 from zoneinfo import ZoneInfo
@@ -27,7 +28,7 @@ from zoneinfo import ZoneInfo
 from .email_format import RED, Cell, money, pct_cell, render_html, render_text
 from .logging_setup import log_event
 from .outbox import enqueue
-from .pgdb import service_tx
+from .pgdb import _params, dict_row, service_tx
 from .report import SEVERITY_ORDER, report_settings_for, severity
 from .rules import EVALUATED_METRICS, ONE_SHOT_METRICS, describe, since_set_change, triggered as rule_triggered
 from .timeutil import local_today, to_iso
@@ -36,6 +37,7 @@ log = logging.getLogger("alert_system.intraday")
 METRIC = "Intraday"
 LIVE_LABEL = {"Daily": METRIC, "Price": "Price live", "SinceSet": "SinceSet"}  # alert_history.metric for live alerts
 SESSION_OPEN, POLL_END = dtime(9, 15), dtime(15, 50)
+LIVE_LOOP_LOCK = 4_673_891  # PostgreSQL advisory lock held by `live-loop` while it runs
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,25 @@ class YahooQuotes:
 
 
 PROVIDERS = {"yahoo": YahooQuotes}
+
+
+@contextmanager
+def live_loop_lock(settings):
+    """Hold the live-loop advisory lock on a dedicated connection; yields
+    False when another live loop already holds it."""
+    import psycopg
+    conn = psycopg.connect(**_params(settings, "service"), row_factory=dict_row, autocommit=True,
+                           keepalives=1, keepalives_idle=60, keepalives_interval=15, keepalives_count=4)
+    try:
+        held = conn.execute("SELECT pg_try_advisory_lock(%s) AS ok", (LIVE_LOOP_LOCK,)).fetchone()["ok"]
+        yield held
+    finally:
+        conn.close()  # closing the session releases the lock
+
+
+def live_loop_running(settings):
+    with service_tx(settings) as conn:
+        return not conn.execute("SELECT pg_try_advisory_xact_lock(%s) AS ok", (LIVE_LOOP_LOCK,)).fetchone()["ok"]
 
 
 def market_window(local_now):

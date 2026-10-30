@@ -99,7 +99,9 @@ class Service:
     def intraday_alerts(self, job, run, attempt, stop_event=None, provider=None):
         if not self.settings.live.enabled:
             return {"status": "disabled"}
-        from .intraday import run_intraday
+        from .intraday import live_loop_running, run_intraday
+        if job is not None and live_loop_running(self.settings):
+            return {"status": "live_loop_running"}  # the live loop checks every minute; avoid double alerts
         client = clickhouse.get_client(self.settings)
         try:
             return run_intraday(self.settings, client, self.clock(), provider=provider)
