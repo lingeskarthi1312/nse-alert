@@ -52,3 +52,22 @@ jobs:
       - name: Scheduler pass
         if: env.CONFIGURED == 'true'
         run: python -m alert_system cloud-tick --budget-minutes 30
+      # Free Streamlit apps sleep after ~12 h without a visitor; a headless
+      # browser visit on the 08:xx, 13:xx and 18:xx IST first ticks keeps the
+      # dashboard up. Never fails the run.
+      - name: Is a dashboard wake due?
+        id: wake
+        if: env.CONFIGURED == 'true'
+        run: |
+          url=$(sed -n 's/^DASHBOARD_PUBLIC_URL=//p' .env | tr -d '"\r')
+          h=$(date +%H); m=$(date +%M)
+          if [ -n "$url" ] && { [ "$h" = 08 ] || [ "$h" = 13 ] || [ "$h" = 18 ]; } && [ "$m" -lt 30 ]; then
+            echo "url=$url" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Wake the dashboard
+        if: steps.wake.outputs.url != ''
+        continue-on-error: true
+        run: |
+          pip install -q playwright==1.55.0
+          python -m playwright install --with-deps --only-shell chromium
+          python scripts/wake_dashboard.py "${{ steps.wake.outputs.url }}"
